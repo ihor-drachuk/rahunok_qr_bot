@@ -1,0 +1,5 @@
+aiogram>=3.20,<4
+anthropic>=0.100
+pydantic>=2.7
+qrcode>=8.0
+pillow>=10.3
