@@ -22,6 +22,15 @@ TEXT_SOURCE = Source(kind="text", text="реквізити")
 FIELD_NAMES = ["recipient_name", "iban", "edrpou_rnokpp", "amount", "payment_purpose"]
 
 
+def stage_collector() -> tuple[list[str], pipeline.OnStage]:
+    stages: list[str] = []
+
+    async def on_stage(status: str) -> None:
+        stages.append(status)
+
+    return stages, on_stage
+
+
 def verdict(all_match: bool) -> ValidationVerdict:
     return ValidationVerdict(
         fields=[FieldVerdict(field=name, matches=all_match) for name in FIELD_NAMES],
@@ -167,6 +176,28 @@ def test_truncated_purpose_adds_warning(monkeypatch):
     assert result.ok
     assert result.warnings == [texts.WARN_TRUNCATED_PURPOSE]
     assert result.qr.truncated_purpose
+
+
+def test_happy_path_emits_stages_in_order_without_retry(monkeypatch):
+    LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)])
+    stages, on_stage = stage_collector()
+    result = asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
+    assert result.ok
+    assert stages == [texts.STATUS_SEARCHING, texts.STATUS_EXTRACTING, texts.STATUS_VALIDATING]
+
+
+def test_gate_rejection_emits_only_searching_stage(monkeypatch):
+    LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)], gate_passes=False)
+    stages, on_stage = stage_collector()
+    asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
+    assert stages == [texts.STATUS_SEARCHING]
+
+
+def test_retry_emits_retrying_stage_exactly_once(monkeypatch):
+    LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(False), verdict(False)])
+    stages, on_stage = stage_collector()
+    asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
+    assert stages == [texts.STATUS_SEARCHING, texts.STATUS_EXTRACTING, texts.STATUS_VALIDATING, texts.STATUS_RETRYING]
 
 
 @pytest.mark.parametrize("raw_iban", ["ua69 3000 0100 0000 0012 3456 78901", " UA693000010000000012345678901 "])

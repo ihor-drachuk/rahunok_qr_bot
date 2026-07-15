@@ -1,5 +1,6 @@
 """Message processing pipeline: gate -> extract -> validate -> retry once -> local checks -> QR."""
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from app import llm, texts
@@ -24,14 +25,25 @@ def _matches(verdict: ValidationVerdict) -> bool:
     return verdict.all_match and all(f.matches for f in verdict.fields)
 
 
-async def process(source: Source) -> PipelineResult:
+OnStage = Callable[[str], Awaitable[None]]
+
+
+async def process(source: Source, on_stage: OnStage | None = None) -> PipelineResult:
+    async def stage(status: str) -> None:
+        if on_stage is not None:
+            await on_stage(status)
+
+    await stage(texts.STATUS_SEARCHING)
     gate_verdict = await llm.gate(source)
     if not gate_verdict.contains_requisites:
         return PipelineResult(ok=False, error=texts.ERR_NOT_PAYMENT)
 
+    await stage(texts.STATUS_EXTRACTING)
     extracted = await llm.extract(source)
+    await stage(texts.STATUS_VALIDATING)
     verdict = await llm.validate(source, extracted)
     if not _matches(verdict):
+        await stage(texts.STATUS_RETRYING)
         extracted = await llm.extract(source)
         verdict = await llm.validate(source, extracted)
         if not _matches(verdict):

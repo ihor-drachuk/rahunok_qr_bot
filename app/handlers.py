@@ -82,9 +82,19 @@ async def _handle_media(message: Message, bot: Bot, file_id: str, kind: str, med
 
 
 async def _process_and_reply(message: Message, source: Source) -> None:
-    status = await message.answer(texts.PROCESSING)
+    status: Message | None = None
+
+    async def on_stage(text: str) -> None:
+        # Status is cosmetic: a failed send/edit must not abort the processing itself.
+        nonlocal status
+        with suppress(TelegramAPIError):
+            if status is None:
+                status = await message.answer(text)
+            else:
+                await status.edit_text(text)
+
     try:
-        result = await pipeline.process(source)
+        result = await pipeline.process(source, on_stage)
         if not result.ok:
             await message.answer(texts.format_error(result.error, result.requisites))
             return
@@ -113,5 +123,6 @@ async def _process_and_reply(message: Message, source: Source) -> None:
         await message.answer(texts.ERR_UNEXPECTED)
     finally:
         # Deleted last so the status message stays visible until the reply has been sent.
-        with suppress(TelegramAPIError):
-            await status.delete()
+        if status is not None:
+            with suppress(TelegramAPIError):
+                await status.delete()
