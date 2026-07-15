@@ -31,9 +31,9 @@ def run_with_result(result: PipelineResult, monkeypatch,
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
-    monkeypatch.setattr(card, "build_card", lambda image, text: b"\x89PNGfake")
+    monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
     message = make_message()
-    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE))
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
     return message
 
 
@@ -111,8 +111,8 @@ def test_failed_status_edit_does_not_abort_processing(monkeypatch):
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
-    monkeypatch.setattr(card, "build_card", lambda image, text: b"\x89PNGfake")
-    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE))
+    monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     message.answer_photo.assert_awaited_once()
     message.answer.return_value.delete.assert_awaited_once()
@@ -130,11 +130,50 @@ def test_failed_status_send_does_not_abort_processing_and_skips_delete(monkeypat
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
-    monkeypatch.setattr(card, "build_card", lambda image, text: b"\x89PNGfake")
-    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE))
+    monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     message.answer_photo.assert_awaited_once()
     message.answer.return_value.delete.assert_not_awaited()  # no status message was ever created
+
+
+def test_stage_mode_is_forwarded_to_card_builder(monkeypatch):
+    result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
+    captured = []
+
+    async def fake_process(source, on_stage=None):
+        return result
+
+    def fake_build_card(image, text, stage_mode):
+        captured.append(stage_mode)
+        return b"\x89PNGfake"
+
+    monkeypatch.setattr(pipeline, "process", fake_process)
+    monkeypatch.setattr(card, "build_card", fake_build_card)
+    message = make_message()
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, True))
+    assert captured == [True]
+
+
+def test_dispatcher_injects_stage_mode_into_handlers(monkeypatch):
+    # Drives a real Update through a real Dispatcher, pinning the workflow-data -> handler-param seam.
+    from datetime import UTC, datetime
+
+    from aiogram import Bot, Dispatcher
+    from aiogram.types import Chat, Message as TgMessage, Update
+
+    captured = []
+
+    async def fake_process_and_reply(message, source, stage_mode):
+        captured.append(stage_mode)
+
+    monkeypatch.setattr(handlers, "_process_and_reply", fake_process_and_reply)
+    dispatcher = Dispatcher(stage_mode=True)
+    dispatcher.include_router(handlers.router)
+    update = Update(update_id=1, message=TgMessage(message_id=1, date=datetime.now(UTC),
+                                                   chat=Chat(id=1, type="private"), text="реквізити"))
+    asyncio.run(dispatcher.feed_update(Bot("42:TEST"), update))
+    assert captured == [True]
 
 
 def test_real_pipeline_drives_status_through_actual_stage_sequence(monkeypatch):
@@ -142,9 +181,9 @@ def test_real_pipeline_drives_status_through_actual_stage_sequence(monkeypatch):
     from tests.test_pipeline import GOOD_REQUISITES, LlmStub, verdict
 
     LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)])
-    monkeypatch.setattr(card, "build_card", lambda image, text: b"\x89PNGfake")
+    monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
     message = make_message()
-    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE))
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     assert message.answer.await_count == 1
     assert message.answer.await_args_list[0].args == (texts.STATUS_SEARCHING,)
@@ -165,7 +204,7 @@ def test_anthropic_error_reported_and_status_deleted(monkeypatch):
 
     monkeypatch.setattr(pipeline, "process", failing_process)
     message = make_message()
-    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE))
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     assert message.answer.await_count == 2  # status message + network error text
     assert message.answer.await_args_list[1].args == (texts.ERR_NETWORK,)

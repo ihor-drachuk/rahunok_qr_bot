@@ -19,7 +19,7 @@ async def main() -> None:
     cfg = load_config()
     llm.init(cfg)
     bot = Bot(cfg.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(stage_mode=cfg.stage_mode)
     dispatcher.include_router(handlers.router)
     await bot.delete_webhook(drop_pending_updates=True)
     await dispatcher.start_polling(bot)

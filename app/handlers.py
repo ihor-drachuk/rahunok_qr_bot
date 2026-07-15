@@ -39,7 +39,7 @@ async def on_start(message: Message) -> None:
 
 
 @router.message(F.document)
-async def on_document(message: Message, bot: Bot) -> None:
+async def on_document(message: Message, bot: Bot, stage_mode: bool) -> None:
     document = message.document
     if document.mime_type == "application/pdf":
         kind, media_type = "pdf", None
@@ -51,18 +51,18 @@ async def on_document(message: Message, bot: Bot) -> None:
     if document.file_size and document.file_size > TELEGRAM_MAX_DOWNLOAD_BYTES:
         await message.answer(texts.ERR_FILE_TOO_BIG)
         return
-    await _handle_media(message, bot, document.file_id, kind, media_type)
+    await _handle_media(message, bot, document.file_id, kind, media_type, stage_mode)
 
 
 @router.message(F.photo)
-async def on_photo(message: Message, bot: Bot) -> None:
+async def on_photo(message: Message, bot: Bot, stage_mode: bool) -> None:
     photo = message.photo[-1]  # largest resolution; Telegram photos are always JPEG
-    await _handle_media(message, bot, photo.file_id, "image", "image/jpeg")
+    await _handle_media(message, bot, photo.file_id, "image", "image/jpeg", stage_mode)
 
 
 @router.message(F.text)
-async def on_text(message: Message) -> None:
-    await _process_and_reply(message, Source(kind="text", text=message.text))
+async def on_text(message: Message, stage_mode: bool) -> None:
+    await _process_and_reply(message, Source(kind="text", text=message.text), stage_mode)
 
 
 @router.message()
@@ -70,7 +70,8 @@ async def on_unsupported(message: Message) -> None:
     await message.answer(texts.ERR_UNSUPPORTED_TYPE)
 
 
-async def _handle_media(message: Message, bot: Bot, file_id: str, kind: str, media_type: str | None) -> None:
+async def _handle_media(message: Message, bot: Bot, file_id: str, kind: str, media_type: str | None,
+                        stage_mode: bool) -> None:
     buffer = io.BytesIO()
     try:
         await bot.download(file_id, destination=buffer)
@@ -78,10 +79,10 @@ async def _handle_media(message: Message, bot: Bot, file_id: str, kind: str, med
         logger.exception("Failed to download file %s", file_id)
         await message.answer(texts.ERR_TELEGRAM)
         return
-    await _process_and_reply(message, Source(kind=kind, data=buffer.getvalue(), media_type=media_type))
+    await _process_and_reply(message, Source(kind=kind, data=buffer.getvalue(), media_type=media_type), stage_mode)
 
 
-async def _process_and_reply(message: Message, source: Source) -> None:
+async def _process_and_reply(message: Message, source: Source, stage_mode: bool) -> None:
     status: Message | None = None
 
     async def on_stage(text: str) -> None:
@@ -99,7 +100,7 @@ async def _process_and_reply(message: Message, source: Source) -> None:
             await message.answer(texts.format_error(result.error, result.requisites))
             return
         text = texts.format_success(result.requisites, result.warnings, result.qr)
-        card_png = card.build_card(result.qr.image, result.card)
+        card_png = card.build_card(result.qr.image, result.card, stage_mode)
         photo = BufferedInputFile(card_png, filename="payment_qr.png")
         if _caption_len(text) <= TELEGRAM_PHOTO_CAPTION_LIMIT:
             # Common case: one message — the card with the text as its caption.

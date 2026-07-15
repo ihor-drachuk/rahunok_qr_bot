@@ -37,6 +37,7 @@ Missing optional fields (amount, name, purpose, code) still produce a QR plus a 
 | `RAHUNOK_QR_BOT_TELEGRAM_TOKEN` | Bot token from [@BotFather](https://t.me/BotFather) |
 | `RAHUNOK_QR_BOT_ANTHROPIC_API_KEY` | Anthropic API key |
 | `RAHUNOK_QR_BOT_MODEL` | Optional: extraction/validation model — `haiku`, `sonnet`, or `opus` (default `opus`). The gate always runs on Haiku. |
+| `RAHUNOK_QR_BOT_STAGE` | Optional: stage mode — `true`/`false` (default `false`). Marks a staging instance by compositing a hammer overlay onto the reply-card logos. |
 
 ## Run locally
 
@@ -56,12 +57,13 @@ python -m app.main
 
 ## Diagnostic CLI
 
-Run the pipeline on a file or text without Telegram — prints the extracted requisites and the decoded QR payload, optionally saving the QR PNG. Uses the same env vars as the bot.
+Run the pipeline on a file or text without Telegram — prints the extracted requisites and the decoded QR payload, optionally saving the QR and reply-card PNGs. Uses the same env vars as the bot.
 
 ```sh
 python -m app.cli invoice.pdf                     # or a .png/.jpg screenshot
 python -m app.cli --text "IBAN UA..., сума 100 грн"
 python -m app.cli invoice.pdf --model haiku --qr-out qr.png
+python -m app.cli invoice.pdf --stage --card-out card.png   # preview the stage-mode card
 ```
 
 ## Tests

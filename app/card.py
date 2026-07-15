@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 _ASSETS = Path(__file__).resolve().parent.parent / "assets"
 _LOGO_HEADER_PATH = _ASSETS / "logo-header.png"  # thin single ring, for the header
 _LOGO_CENTER_PATH = _ASSETS / "logo-center.png"  # ring + white gap, sits over the QR modules
+_LOGO_HAMMER_PATH = _ASSETS / "logo-hammer-shadow.png"  # stage-mode hammer, composited over both logos
 _MANROPE_PATH = _ASSETS / "fonts" / "Manrope.ttf"
 _MONO_MEDIUM_PATH = _ASSETS / "fonts" / "IBMPlexMono-Medium.ttf"
 _MONO_SEMIBOLD_PATH = _ASSETS / "fonts" / "IBMPlexMono-SemiBold.ttf"
@@ -38,6 +39,10 @@ _HEADER_GAP = 16
 _QR_PANEL_RADIUS = 22
 _QR_PANEL_PAD = 22
 _CENTER_LOGO_FRACTION = 0.27  # ringed-logo diameter as a fraction of the QR panel inner size
+
+# Stage-mode hammer bounding box, in the 1840x1840 logo design space.
+_LOGO_DESIGN_SIDE = 1840
+_HAMMER_LEFT, _HAMMER_TOP, _HAMMER_SIDE = 729, 758, 967
 
 _BRAND_TITLE = "Рахунок → QR"
 _BRAND_HANDLE = "@rahunok_qr_bot"
@@ -68,14 +73,33 @@ def _mono(size: int, semibold: bool) -> ImageFont.FreeTypeFont:
     return _font(str(path), size * _S, None)
 
 
-@lru_cache(maxsize=1)
-def _logo_header() -> Image.Image:
-    return Image.open(_LOGO_HEADER_PATH).convert("RGBA")
+@lru_cache(maxsize=4)
+def _hammer_glyph(side: int, color: tuple[int, int, int]) -> Image.Image:
+    alpha = Image.open(_LOGO_HAMMER_PATH).convert("RGBA").resize((side, side), Image.LANCZOS).getchannel("A")
+    glyph = Image.new("RGBA", (side, side), (*color, 255))
+    glyph.putalpha(alpha)
+    return glyph
 
 
-@lru_cache(maxsize=1)
-def _logo_center() -> Image.Image:
-    return Image.open(_LOGO_CENTER_PATH).convert("RGBA")
+def _stamp_hammer(logo: Image.Image) -> Image.Image:
+    scale = logo.width / _LOGO_DESIGN_SIDE
+    side = round(_HAMMER_SIDE * scale)
+    hammer = Image.open(_LOGO_HAMMER_PATH).convert("RGBA").resize((side, side), Image.LANCZOS)
+    stamped = logo.copy()
+    stamped.alpha_composite(hammer, (round(_HAMMER_LEFT * scale), round(_HAMMER_TOP * scale)))
+    return stamped
+
+
+@lru_cache(maxsize=2)
+def _logo_header(stage_mode: bool) -> Image.Image:
+    logo = Image.open(_LOGO_HEADER_PATH).convert("RGBA")
+    return _stamp_hammer(logo) if stage_mode else logo
+
+
+@lru_cache(maxsize=2)
+def _logo_center(stage_mode: bool) -> Image.Image:
+    logo = Image.open(_LOGO_CENTER_PATH).convert("RGBA")
+    return _stamp_hammer(logo) if stage_mode else logo
 
 
 def _flag_bar(width: int, height: int) -> Image.Image:
@@ -88,13 +112,29 @@ def _flag_bar(width: int, height: int) -> Image.Image:
     return bar
 
 
-def _center_logo(panel_inner: int) -> Image.Image:
+def _center_logo(panel_inner: int, stage_mode: bool) -> Image.Image:
     # The ringed logo asset (flag ring + white gap + logo) is inserted as-is, sized to the QR panel.
     logo_d = round(panel_inner * _CENTER_LOGO_FRACTION)
-    return _logo_center().resize((logo_d, logo_d), Image.LANCZOS)
+    return _logo_center(stage_mode).resize((logo_d, logo_d), Image.LANCZOS)
 
 
-def _render_header_text(max_w: int, subtitle: str, title_font, subtitle_font, handle_font) -> Image.Image:
+def _draw_title_hammer_suffix(layer: Image.Image, draw: ImageDraw.ImageDraw, baseline: int, title_font) -> None:
+    # Appends " (🛠)" to the title; Manrope has no emoji glyphs, so the hammer asset is drawn instead.
+    # The suffix uses a smaller size than the title so its parens (taller than cap height) stay inside
+    # the title's visible band and the header height, which drives the whole layout, is unchanged.
+    font = _font(str(_MANROPE_PATH), round(title_font.size * 0.8), 800)
+    side = baseline - draw.textbbox((0, baseline), "(", font=font, anchor="ls")[1]
+    pad = round(side * 0.1)
+    x = draw.textlength(_BRAND_TITLE, font=title_font)
+    draw.text((x, baseline), " (", font=font, fill=_TITLE, anchor="ls")
+    x += draw.textlength(" (", font=font) + pad
+    layer.alpha_composite(_hammer_glyph(side, _TITLE), (round(x), baseline - side))
+    x += side + pad
+    draw.text((x, baseline), ")", font=font, fill=_TITLE, anchor="ls")
+
+
+def _render_header_text(max_w: int, subtitle: str, title_font, subtitle_font, handle_font,
+                        stage_mode: bool) -> Image.Image:
     # Title / description / @handle stacked on baselines like a CSS line box (gap = upper descender
     # + margin + lower ascender, so the "_" in the handle doesn't distort the rhythm), then cropped
     # to its visible pixels so callers can size and center it precisely.
@@ -109,6 +149,8 @@ def _render_header_text(max_w: int, subtitle: str, title_font, subtitle_font, ha
     layer = Image.new("RGBA", (max_w, layer_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     baseline = metrics[0][0]
+    if stage_mode:
+        _draw_title_hammer_suffix(layer, draw, baseline, title_font)
     for i, (t, f, color) in enumerate(lines):
         draw.text((0, baseline), t, font=f, fill=color, anchor="ls")
         if i < len(margins):
@@ -181,7 +223,7 @@ def _draw_pill(card: Image.Image, draw: ImageDraw.ImageDraw, center_x: int, top_
     card.alpha_composite(pill, (center_x - pill_w // 2, top_y))
 
 
-def build_card(qr_image: Image.Image, text: CardText) -> bytes:
+def build_card(qr_image: Image.Image, text: CardText, stage_mode: bool = False) -> bytes:
     s = _S
     card_w = _CARD_W * s
     pad = _PAD * s
@@ -199,7 +241,7 @@ def build_card(qr_image: Image.Image, text: CardText) -> bytes:
 
     # Build the header text block (title / description / @handle) now, so its visible height can
     # drive both the header row height and the logo size (the logo matches the text block height).
-    header_text = _render_header_text(inner_w, text.subtitle, title_font, subtitle_font, handle_font)
+    header_text = _render_header_text(inner_w, text.subtitle, title_font, subtitle_font, handle_font, stage_mode)
     header_h = header_text.height
     logo_side = header_h  # logo occupies the full height of the text block
 
@@ -237,7 +279,7 @@ def build_card(qr_image: Image.Image, text: CardText) -> bytes:
     card.alpha_composite(_flag_bar(inner_w, accent_h), (pad, accent_y))
 
     # Logo sized to the text block height; both share the header row's top since header_h == both.
-    logo = _logo_header().resize((logo_side, logo_side), Image.LANCZOS)
+    logo = _logo_header(stage_mode).resize((logo_side, logo_side), Image.LANCZOS)
     card.alpha_composite(logo, (pad, header_y))
     text_x = pad + logo_side + _HEADER_GAP * s
     card.alpha_composite(header_text, (text_x, header_y))
@@ -248,7 +290,7 @@ def build_card(qr_image: Image.Image, text: CardText) -> bytes:
                                             radius=_QR_PANEL_RADIUS * s, fill=_WHITE)
     qr_scaled = qr_image.convert("RGBA").resize((panel_inner, panel_inner), Image.LANCZOS)
     panel.alpha_composite(qr_scaled, (panel_pad, panel_pad))
-    ring = _center_logo(panel_inner)
+    ring = _center_logo(panel_inner, stage_mode)
     rx = panel_pad + (panel_inner - ring.width) // 2
     panel.alpha_composite(ring, (rx, rx))
     card.alpha_composite(panel, (pad, panel_y))

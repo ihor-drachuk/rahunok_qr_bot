@@ -6,7 +6,7 @@ import base64
 import sys
 from pathlib import Path
 
-from app import llm, pipeline
+from app import card, llm, pipeline
 from app.config import load_config
 from app.llm import Source
 from app.qr import NBU_QR_PREFIX
@@ -33,7 +33,8 @@ def _decoded_payload_lines(url: str) -> list[str]:
 
 
 async def _run(args: argparse.Namespace) -> None:
-    llm.init(load_config(model_override=args.model))
+    cfg = load_config(model_override=args.model, stage_override=args.stage)
+    llm.init(cfg)
     result = await pipeline.process(_build_source(args))
 
     if result.requisites is not None:
@@ -52,9 +53,12 @@ async def _run(args: argparse.Namespace) -> None:
     if args.qr_out:
         Path(args.qr_out).write_bytes(result.qr.png)
         print(f"QR PNG saved to {args.qr_out}")
+    if args.card_out:
+        Path(args.card_out).write_bytes(card.build_card(result.qr.image, result.card, cfg.stage_mode))
+        print(f"Card PNG saved to {args.card_out}")
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the requisites pipeline on a file or text")
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument("file", nargs="?", help="Path to a PDF/PNG/JPEG file")
@@ -62,7 +66,14 @@ def main() -> None:
     parser.add_argument("--model", choices=("haiku", "sonnet", "opus"),
                         help="Extraction/validation model (overrides RAHUNOK_QR_BOT_MODEL)")
     parser.add_argument("--qr-out", help="Where to save the QR PNG")
-    asyncio.run(_run(parser.parse_args()))
+    parser.add_argument("--card-out", help="Where to save the rendered reply-card PNG")
+    parser.add_argument("--stage", action="store_true", default=None,
+                        help="Stage mode: hammer overlay on the card logos (overrides RAHUNOK_QR_BOT_STAGE)")
+    return parser
+
+
+def main() -> None:
+    asyncio.run(_run(_build_parser().parse_args()))
 
 
 if __name__ == "__main__":
