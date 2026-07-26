@@ -62,7 +62,7 @@ def test_format_success_escapes_values_and_lists_warnings():
 
 def test_format_success_without_warnings_has_no_warning_block():
     out = format_success(ExtractedRequisites(iban=VALID_IBAN), [], QR)
-    assert "⚠️" not in out
+    assert "Що варто перевірити" not in out
 
 
 def test_format_success_ends_with_share_footer():
