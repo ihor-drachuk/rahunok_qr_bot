@@ -1,9 +1,9 @@
 import asyncio
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 from PIL import Image
 
-from app import card, handlers, pipeline, texts
+from app import card, handlers, pipeline, stickers, texts
 from app.card import CardText
 from app.llm import Source
 from app.models import ExtractedRequisites
@@ -24,7 +24,8 @@ def make_message() -> AsyncMock:
 
 
 def run_with_result(result: PipelineResult, monkeypatch,
-                    stages: tuple[str, ...] = (texts.STATUS_SEARCHING,)) -> AsyncMock:
+                    stages: tuple[str, ...] = (texts.STATUS_SEARCHING,),
+                    message: AsyncMock | None = None) -> AsyncMock:
     async def fake_process(source, on_stage=None):
         for stage in stages:
             await on_stage(stage)
@@ -32,7 +33,8 @@ def run_with_result(result: PipelineResult, monkeypatch,
 
     monkeypatch.setattr(pipeline, "process", fake_process)
     monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
-    message = make_message()
+    if message is None:
+        message = make_message()
     asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
     return message
 
@@ -135,6 +137,82 @@ def test_failed_status_send_does_not_abort_processing_and_skips_delete(monkeypat
 
     message.answer_photo.assert_awaited_once()
     message.answer.return_value.delete.assert_not_awaited()  # no status message was ever created
+
+
+def test_processing_sticker_sent_first_and_deleted_with_status(monkeypatch):
+    monkeypatch.setattr(stickers, "processing_sticker_file_id", "GEAR_ID")
+    result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
+    message = run_with_result(result, monkeypatch)
+
+    message.answer_sticker.assert_awaited_once_with("GEAR_ID")
+    sticker = message.answer_sticker.return_value
+    status = message.answer.return_value
+    sticker.delete.assert_awaited_once()
+    status.delete.assert_awaited_once()
+    message.answer_photo.assert_awaited_once()
+
+    # Order requirement: sticker before status, and the reply before both deletions.
+    names = [c[0] for c in message.mock_calls]
+    assert names.index("answer_sticker") < names.index("answer")
+    assert names.index("answer_photo") < names.index("answer_sticker().delete")
+    assert names.index("answer_photo") < names.index("answer().delete")
+
+
+def test_no_sticker_sent_when_file_id_unresolved(monkeypatch):
+    monkeypatch.setattr(stickers, "processing_sticker_file_id", None)
+    result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
+    message = run_with_result(result, monkeypatch)
+
+    message.answer_sticker.assert_not_awaited()
+    message.answer.return_value.delete.assert_awaited_once()
+
+
+def test_failed_sticker_send_does_not_abort_processing(monkeypatch):
+    from aiogram.exceptions import TelegramAPIError
+
+    monkeypatch.setattr(stickers, "processing_sticker_file_id", "GEAR_ID")
+    result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
+    message = make_message()
+    message.answer_sticker.side_effect = TelegramAPIError(method=None, message="sticker failed")
+
+    async def fake_process(source, on_stage=None):
+        await on_stage(texts.STATUS_SEARCHING)
+        return result
+
+    monkeypatch.setattr(pipeline, "process", fake_process)
+    monkeypatch.setattr(card, "build_card", lambda image, text, stage_mode: b"\x89PNGfake")
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
+
+    message.answer_photo.assert_awaited_once()
+
+
+def test_sticker_deleted_even_when_processing_raises(monkeypatch):
+    monkeypatch.setattr(stickers, "processing_sticker_file_id", "GEAR_ID")
+    message = make_message()
+
+    async def failing_process(source, on_stage=None):
+        await on_stage(texts.STATUS_SEARCHING)
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline, "process", failing_process)
+    asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
+
+    assert message.answer.await_args_list[1].args == (texts.ERR_UNEXPECTED,)
+    message.answer_sticker.return_value.delete.assert_awaited_once()
+    message.answer.return_value.delete.assert_awaited_once()
+
+
+def test_failed_sticker_delete_still_deletes_status(monkeypatch):
+    from aiogram.exceptions import TelegramAPIError
+
+    monkeypatch.setattr(stickers, "processing_sticker_file_id", "GEAR_ID")
+    result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
+    message = make_message()
+    message.answer_sticker.return_value.delete.side_effect = TelegramAPIError(method=None, message="del failed")
+
+    message = run_with_result(result, monkeypatch, message=message)
+
+    message.answer.return_value.delete.assert_awaited_once()  # status delete not skipped by the sticker's failure
 
 
 def test_stage_mode_is_forwarded_to_card_builder(monkeypatch):

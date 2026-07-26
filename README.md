@@ -20,6 +20,8 @@ Send the bot a PDF invoice, a screenshot, or plain text with requisites — it e
 4. **Deterministic checks** — IBAN MOD-97 checksum (hard gate: no QR without a valid IBAN), EDRPOU/RNOKPP shape, amount parsing.
 5. **QR** — the NBU payload (14 fixed lines, CP1251, base64url, ≤331 bytes) is rendered as a QR code with error correction M.
 
+While the pipeline runs, the bot shows a looping ⚙️ sticker above a live status message (both resolved from the bot's own [sticker pack](https://t.me/addstickers/rahunok_qr_bot) at startup) and removes them once the reply is ready.
+
 Missing optional fields (amount, name, purpose, code) still produce a QR plus a warning — e.g. without an amount the banking app simply asks the payer to enter it. The bot replies in Ukrainian.
 
 ## Supported inputs

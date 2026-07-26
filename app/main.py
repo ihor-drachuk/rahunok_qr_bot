@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from app import handlers, llm
+from app import handlers, llm, stickers
 from app.config import load_config
 
 
@@ -21,6 +21,7 @@ async def main() -> None:
     bot = Bot(cfg.telegram_bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher(stage_mode=cfg.stage_mode)
     dispatcher.include_router(handlers.router)
+    await stickers.resolve_processing_sticker(bot)
     await bot.delete_webhook(drop_pending_updates=True)
     await dispatcher.start_polling(bot)
 

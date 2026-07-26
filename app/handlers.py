@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile, LinkPreviewOptions, Message
 
-from app import card, pipeline, texts
+from app import card, pipeline, stickers, texts
 from app.config import TELEGRAM_MAX_DOWNLOAD_BYTES
 from app.llm import Source
 
@@ -83,10 +83,16 @@ async def _handle_media(message: Message, bot: Bot, file_id: str, kind: str, med
 
 
 async def _process_and_reply(message: Message, source: Source, stage_mode: bool) -> None:
+    sticker: Message | None = None
     status: Message | None = None
 
+    # A looping sticker sits above the status text while processing runs. Both are cosmetic: any
+    # send/edit failure must not abort the processing itself, so every call is suppressed.
+    if stickers.processing_sticker_file_id is not None:
+        with suppress(TelegramAPIError):
+            sticker = await message.answer_sticker(stickers.processing_sticker_file_id)
+
     async def on_stage(text: str) -> None:
-        # Status is cosmetic: a failed send/edit must not abort the processing itself.
         nonlocal status
         with suppress(TelegramAPIError):
             if status is None:
@@ -123,7 +129,8 @@ async def _process_and_reply(message: Message, source: Source, stage_mode: bool)
         logger.exception("Unexpected error during processing")
         await message.answer(texts.ERR_UNEXPECTED)
     finally:
-        # Deleted last so the status message stays visible until the reply has been sent.
-        if status is not None:
-            with suppress(TelegramAPIError):
-                await status.delete()
+        # Deleted last so the sticker and status stay visible until the reply has been sent.
+        for progress_msg in (sticker, status):
+            if progress_msg is not None:
+                with suppress(TelegramAPIError):
+                    await progress_msg.delete()
