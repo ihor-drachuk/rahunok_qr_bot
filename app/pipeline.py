@@ -33,17 +33,17 @@ async def process(source: Source, on_stage: OnStage | None = None) -> PipelineRe
         if on_stage is not None:
             await on_stage(status)
 
-    await stage(texts.STATUS_SEARCHING)
+    await stage(texts.status_searching())
     gate_verdict = await llm.gate(source)
     if not gate_verdict.contains_requisites:
         return PipelineResult(ok=False, error=texts.ERR_NOT_PAYMENT)
 
-    await stage(texts.STATUS_EXTRACTING)
+    await stage(texts.status_extracting())
     extracted = await llm.extract(source)
-    await stage(texts.STATUS_VALIDATING)
+    await stage(texts.status_validating())
     verdict = await llm.validate(source, extracted)
     if not _matches(verdict):
-        await stage(texts.STATUS_RETRYING)
+        await stage(texts.status_retrying())
         extracted = await llm.extract(source)
         verdict = await llm.validate(source, extracted)
         if not _matches(verdict):

@@ -4,6 +4,8 @@ from decimal import Decimal
 
 from aiogram import html
 
+from app import emoji
+
 CARD_SUBTITLE = "Telegram-бот для зручної оплати"
 CARD_CALL_TO_ACTION = "Відкрий банк → Скануй QR-код"
 
@@ -32,10 +34,21 @@ HELP = (
     "• Текстове повідомлення з реквізитами"
 )
 
-STATUS_SEARCHING = "🔍 Шукаю платіжні реквізити…"
-STATUS_EXTRACTING = "⚙️ Розпізнаю реквізити…"
-STATUS_VALIDATING = "🔀 Звіряю реквізити…"
-STATUS_RETRYING = "🔁 Ще раз все перевіряю…"
+# Status lines are built on demand so the ⚙️ can render as the pack's custom emoji once resolved.
+def status_searching() -> str:
+    return f"{emoji.render('⚙️')} Шукаю платіжні реквізити…"
+
+
+def status_extracting() -> str:
+    return f"{emoji.render('⚙️')} Розпізнаю реквізити…"
+
+
+def status_validating() -> str:
+    return f"{emoji.render('⚙️')} Звіряю реквізити…"
+
+
+def status_retrying() -> str:
+    return f"{emoji.render('⚙️')} Ще раз все перевіряю…"
 
 ERR_NOT_PAYMENT = (
     "🤷 Я не знайшов тут платіжних реквізитів.\n\n"
@@ -97,7 +110,7 @@ def format_pay_links(qr) -> str:
 
 
 def format_success(requisites, warnings: list[str], qr) -> str:
-    text = "🧾 Реквізити платежу:\n" + format_requisites(requisites)
+    text = f"{emoji.render('🧾')} Реквізити платежу:\n" + format_requisites(requisites)
     if warnings:
         text += "\n\n📝 Що варто перевірити:\n" + "\n".join(f"• {w}" for w in warnings)
     text += "\n\n" + format_pay_links(qr)

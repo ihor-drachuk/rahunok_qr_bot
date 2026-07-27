@@ -24,8 +24,10 @@ def make_message() -> AsyncMock:
 
 
 def run_with_result(result: PipelineResult, monkeypatch,
-                    stages: tuple[str, ...] = (texts.STATUS_SEARCHING,),
+                    stages: tuple[str, ...] | None = None,
                     message: AsyncMock | None = None) -> AsyncMock:
+    if stages is None:
+        stages = (texts.status_searching(),)
     async def fake_process(source, on_stage=None):
         for stage in stages:
             await on_stage(stage)
@@ -49,7 +51,7 @@ def test_short_reply_is_photo_with_caption_in_one_message(monkeypatch):
     assert caption == texts.format_success(requisites, [], QR)
     assert message.answer_photo.await_args.kwargs["link_preview_options"].is_disabled
     assert message.answer.await_count == 1  # only the status message; no separate text
-    assert message.answer.await_args_list[0].args == (texts.STATUS_SEARCHING,)
+    assert message.answer.await_args_list[0].args == (texts.status_searching(),)
 
 
 def test_long_reply_falls_back_to_photo_then_text(monkeypatch):
@@ -89,13 +91,13 @@ def test_pipeline_failure_sends_error_and_no_photo(monkeypatch):
 
 def test_stage_updates_edit_the_single_status_message(monkeypatch):
     result = PipelineResult(ok=True, qr=QR, card=CARD, requisites=ExtractedRequisites(iban=VALID_IBAN))
-    stages = (texts.STATUS_SEARCHING, texts.STATUS_EXTRACTING, texts.STATUS_VALIDATING)
+    stages = (texts.status_searching(), texts.status_extracting(), texts.status_validating())
     message = run_with_result(result, monkeypatch, stages=stages)
 
     assert message.answer.await_count == 1
     status = message.answer.return_value
-    assert [call.args for call in status.edit_text.await_args_list] == [(texts.STATUS_EXTRACTING,),
-                                                                        (texts.STATUS_VALIDATING,)]
+    assert [call.args for call in status.edit_text.await_args_list] == [(texts.status_extracting(),),
+                                                                        (texts.status_validating(),)]
     status.delete.assert_awaited_once()
     message.answer_photo.assert_awaited_once()
 
@@ -108,8 +110,8 @@ def test_failed_status_edit_does_not_abort_processing(monkeypatch):
     message.answer.return_value.edit_text.side_effect = TelegramAPIError(method=None, message="edit failed")
 
     async def fake_process(source, on_stage=None):
-        await on_stage(texts.STATUS_SEARCHING)
-        await on_stage(texts.STATUS_EXTRACTING)
+        await on_stage(texts.status_searching())
+        await on_stage(texts.status_extracting())
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
@@ -128,7 +130,7 @@ def test_failed_status_send_does_not_abort_processing_and_skips_delete(monkeypat
     message.answer.side_effect = TelegramAPIError(method=None, message="send failed")
 
     async def fake_process(source, on_stage=None):
-        await on_stage(texts.STATUS_SEARCHING)
+        await on_stage(texts.status_searching())
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
@@ -176,7 +178,7 @@ def test_failed_sticker_send_does_not_abort_processing(monkeypatch):
     message.answer_sticker.side_effect = TelegramAPIError(method=None, message="sticker failed")
 
     async def fake_process(source, on_stage=None):
-        await on_stage(texts.STATUS_SEARCHING)
+        await on_stage(texts.status_searching())
         return result
 
     monkeypatch.setattr(pipeline, "process", fake_process)
@@ -191,7 +193,7 @@ def test_sticker_deleted_even_when_processing_raises(monkeypatch):
     message = make_message()
 
     async def failing_process(source, on_stage=None):
-        await on_stage(texts.STATUS_SEARCHING)
+        await on_stage(texts.status_searching())
         raise RuntimeError("boom")
 
     monkeypatch.setattr(pipeline, "process", failing_process)
@@ -264,10 +266,10 @@ def test_real_pipeline_drives_status_through_actual_stage_sequence(monkeypatch):
     asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     assert message.answer.await_count == 1
-    assert message.answer.await_args_list[0].args == (texts.STATUS_SEARCHING,)
+    assert message.answer.await_args_list[0].args == (texts.status_searching(),)
     status = message.answer.return_value
-    assert [call.args for call in status.edit_text.await_args_list] == [(texts.STATUS_EXTRACTING,),
-                                                                        (texts.STATUS_VALIDATING,)]
+    assert [call.args for call in status.edit_text.await_args_list] == [(texts.status_extracting(),),
+                                                                        (texts.status_validating(),)]
     status.delete.assert_awaited_once()
     message.answer_photo.assert_awaited_once()
 
@@ -277,7 +279,7 @@ def test_anthropic_error_reported_and_status_deleted(monkeypatch):
     import httpx
 
     async def failing_process(source, on_stage=None):
-        await on_stage(texts.STATUS_SEARCHING)
+        await on_stage(texts.status_searching())
         raise anthropic.APIConnectionError(request=httpx.Request("POST", "https://api.anthropic.com"))
 
     monkeypatch.setattr(pipeline, "process", failing_process)

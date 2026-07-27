@@ -22,6 +22,7 @@ async def main() -> None:
     dispatcher = Dispatcher(stage_mode=cfg.stage_mode)
     dispatcher.include_router(handlers.router)
     await stickers.resolve_processing_sticker(bot)
+    await stickers.resolve_custom_emoji(bot)
     await bot.delete_webhook(drop_pending_updates=True)
     await dispatcher.start_polling(bot)
 

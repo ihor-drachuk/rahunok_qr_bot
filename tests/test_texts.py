@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+import pytest
+
+from app import emoji, texts
 from app.models import ExtractedRequisites
 from app.texts import (
     format_card_amount,
@@ -99,3 +102,47 @@ def test_format_error_appends_found_fields():
 def test_format_error_without_requisites_is_bare_error():
     assert format_error("помилка", None) == "помилка"
     assert format_error("помилка", ExtractedRequisites()) == "помилка"
+
+
+@pytest.fixture
+def _resolved_gear():
+    emoji.set_custom_emoji_ids({"⚙️": "GEAR_EID"})
+    yield
+    emoji.set_custom_emoji_ids({})
+
+
+def test_every_status_line_uses_the_gear_custom_emoji(_resolved_gear):
+    tag = '<tg-emoji emoji-id="GEAR_EID">⚙️</tg-emoji>'
+    for status in (texts.status_searching, texts.status_extracting,
+                   texts.status_validating, texts.status_retrying):
+        assert status().startswith(tag + " ")
+
+
+def test_status_lines_fall_back_to_plain_gear_when_unresolved():
+    for status in (texts.status_searching, texts.status_extracting,
+                   texts.status_validating, texts.status_retrying):
+        assert status().startswith("⚙️ ")
+
+
+def test_success_header_falls_back_to_plain_receipt_when_unresolved():
+    out = format_success(ExtractedRequisites(iban=VALID_IBAN), [], QR)
+    assert out.startswith("🧾 Реквізити платежу:\n")
+
+
+def test_success_header_uses_receipt_custom_emoji_when_resolved():
+    emoji.set_custom_emoji_ids({"🧾": "RECEIPT_EID"})
+    try:
+        out = format_success(ExtractedRequisites(iban=VALID_IBAN), [], QR)
+        assert out.startswith('<tg-emoji emoji-id="RECEIPT_EID">🧾</tg-emoji> Реквізити платежу:\n')
+    finally:
+        emoji.set_custom_emoji_ids({})
+
+
+def test_set_custom_emoji_ids_replaces_rather_than_merges():
+    emoji.set_custom_emoji_ids({"⚙️": "OLD_GEAR"})
+    emoji.set_custom_emoji_ids({"🧾": "NEW_RECEIPT"})
+    try:
+        assert emoji.render("⚙️") == "⚙️"  # the earlier entry is gone, not merged
+        assert emoji.render("🧾") == '<tg-emoji emoji-id="NEW_RECEIPT">🧾</tg-emoji>'
+    finally:
+        emoji.set_custom_emoji_ids({})

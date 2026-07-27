@@ -183,21 +183,22 @@ def test_happy_path_emits_stages_in_order_without_retry(monkeypatch):
     stages, on_stage = stage_collector()
     result = asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
     assert result.ok
-    assert stages == [texts.STATUS_SEARCHING, texts.STATUS_EXTRACTING, texts.STATUS_VALIDATING]
+    assert stages == [texts.status_searching(), texts.status_extracting(), texts.status_validating()]
 
 
 def test_gate_rejection_emits_only_searching_stage(monkeypatch):
     LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)], gate_passes=False)
     stages, on_stage = stage_collector()
     asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
-    assert stages == [texts.STATUS_SEARCHING]
+    assert stages == [texts.status_searching()]
 
 
 def test_retry_emits_retrying_stage_exactly_once(monkeypatch):
     LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(False), verdict(False)])
     stages, on_stage = stage_collector()
     asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
-    assert stages == [texts.STATUS_SEARCHING, texts.STATUS_EXTRACTING, texts.STATUS_VALIDATING, texts.STATUS_RETRYING]
+    assert stages == [texts.status_searching(), texts.status_extracting(),
+                      texts.status_validating(), texts.status_retrying()]
 
 
 @pytest.mark.parametrize("raw_iban", ["ua69 3000 0100 0000 0012 3456 78901", " UA693000010000000012345678901 "])
