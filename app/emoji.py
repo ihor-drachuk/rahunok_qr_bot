@@ -7,7 +7,7 @@ render. Only the owner's Telegram Premium lets the bot send these — see resolv
 
 from aiogram import html
 
-# base emoji -> custom_emoji_id; populated by app.stickers.resolve_custom_emoji() at startup.
+# base emoji -> custom_emoji_id; populated by app.emoji_pack.resolve_custom_emoji() at startup.
 _custom_emoji_ids: dict[str, str] = {}
 
 

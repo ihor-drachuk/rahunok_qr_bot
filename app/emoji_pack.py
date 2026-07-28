@@ -1,4 +1,4 @@
-"""Resolves the bot's pack assets at startup: the processing sticker's file_id and the custom-emoji IDs."""
+"""Resolves the bot's custom-emoji IDs from its emoji pack, once at startup."""
 
 import logging
 
@@ -9,27 +9,9 @@ from app import emoji
 
 logger = logging.getLogger(__name__)
 
-STICKER_SET_NAME = "rahunok_qr_bot"
-PROCESSING_STICKER_EMOJI = "⚙️"
-
 EMOJI_SET_NAME = "rahunok_qr_emoji"
 # Base emoji whose custom-pack variants are used inline in message text (see app.emoji).
 CUSTOM_EMOJIS = ("⚙️", "🧾")
-
-# Populated by resolve_processing_sticker() at startup, then read by handlers.
-processing_sticker_file_id: str | None = None
-
-
-async def resolve_processing_sticker(bot: Bot) -> str:
-    """Look up the ⚙️ sticker in the pack and cache its file_id. Raises if absent."""
-    global processing_sticker_file_id
-    sticker_set = await bot.get_sticker_set(STICKER_SET_NAME)
-    for sticker in sticker_set.stickers:
-        if sticker.emoji == PROCESSING_STICKER_EMOJI:
-            processing_sticker_file_id = sticker.file_id
-            return sticker.file_id
-    raise RuntimeError(
-        f"Sticker {PROCESSING_STICKER_EMOJI!r} not found in pack {STICKER_SET_NAME!r}")
 
 
 async def resolve_custom_emoji(bot: Bot) -> None:
