@@ -1,6 +1,7 @@
 import asyncio
 from unittest.mock import AsyncMock, call
 
+from nbu_payment_qr import QrResult
 from PIL import Image
 
 from app import card, handlers, pipeline, texts
@@ -8,12 +9,11 @@ from app.card import CardText
 from app.llm import Source
 from app.models import ExtractedRequisites
 from app.pipeline import PipelineResult
-from app.qr import QrResult
 
 VALID_IBAN = "UA693000010000000012345678901"
 TEXT_SOURCE = Source(kind="text", text="реквізити")
 
-QR = QrResult(image=Image.new("RGBA", (4, 4)), url="https://bank.gov.ua/qr/x", truncated_purpose=False)
+QR = QrResult(image=Image.new("RGBA", (4, 4)), url="https://bank.gov.ua/qr/x", payload="", truncated_purpose=False)
 CARD = CardText(subtitle="s", call_to_action="c", recipient="ТОВ", amount="1.00 грн")
 
 
@@ -69,7 +69,7 @@ def test_long_reply_falls_back_to_photo_then_text(monkeypatch):
 def test_long_pay_link_urls_do_not_force_the_fallback(monkeypatch):
     # Long base64 pay-link URLs inflate the raw HTML but not the visible caption length.
     long_url = "https://bank.gov.ua/qr/" + "A" * 500
-    qr = QrResult(image=Image.new("RGBA", (4, 4)), url=long_url, truncated_purpose=False)
+    qr = QrResult(image=Image.new("RGBA", (4, 4)), url=long_url, payload="", truncated_purpose=False)
     requisites = ExtractedRequisites(iban=VALID_IBAN)
     result = PipelineResult(ok=True, qr=qr, card=CARD, requisites=requisites)
     message = run_with_result(result, monkeypatch)

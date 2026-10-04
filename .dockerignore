@@ -1,4 +1,5 @@
 .git/
+libs/
 .github/
 .venv/
 __pycache__/

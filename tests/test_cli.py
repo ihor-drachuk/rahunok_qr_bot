@@ -3,13 +3,13 @@ import base64
 from types import SimpleNamespace
 
 import pytest
+from nbu_payment_qr import NBU_QR_PREFIX, build_nbu_qr
 
 from app import cli, llm, pipeline
 from app.card import CardText
 from app.cli import _build_parser, _build_source, _decoded_payload_lines
 from app.models import ExtractedRequisites
-from app.pipeline import PipelineResult
-from app.qr import NBU_QR_PREFIX, build_nbu_qr
+from app.pipeline import RAHUNOK_STYLE, PipelineResult
 
 VALID_IBAN = "UA693000010000000012345678901"
 
@@ -66,7 +66,7 @@ def _stub_pipeline(monkeypatch):
     monkeypatch.setenv("RAHUNOK_QR_BOT_ANTHROPIC_API_KEY", "key")
     monkeypatch.setenv("RAHUNOK_QR_BOT_STAGE", "0")
     monkeypatch.setattr(llm, "init", lambda cfg: None)
-    qr = build_nbu_qr("ТОВ", VALID_IBAN, None, None, "оплата")
+    qr = build_nbu_qr(name="ТОВ", iban=VALID_IBAN, purpose="оплата", style=RAHUNOK_STYLE)
     card_text = CardText(subtitle="s", call_to_action="c", recipient="ТОВ", amount=None)
     result = PipelineResult(ok=True, qr=qr, card=card_text, requisites=ExtractedRequisites(iban=VALID_IBAN))
 

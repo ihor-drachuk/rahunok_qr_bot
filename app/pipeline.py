@@ -3,12 +3,27 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
+from nbu_payment_qr import (
+    MAX_AMOUNT,
+    PayloadOverflowError,
+    QrResult,
+    QrStyle,
+    build_nbu_qr,
+    classify_code,
+    is_valid_iban,
+    normalize_code,
+    normalize_iban,
+    parse_amount,
+)
+from qrcode.constants import ERROR_CORRECT_H
+
 from app import llm, texts
 from app.card import CardText
 from app.llm import Source
 from app.models import ExtractedRequisites, ValidationVerdict
-from app.qr import QrResult, build_nbu_qr
-from app.validation import classify_code, is_valid_iban, normalize_code, normalize_iban, parse_amount
+
+# Blue to teal radial gradient. Error correction H keeps the QR readable under the card's centered logo.
+RAHUNOK_STYLE = QrStyle(error_correction=ERROR_CORRECT_H, center_color=(30, 90, 168), edge_color=(18, 130, 120))
 
 
 @dataclass
@@ -55,7 +70,10 @@ async def process(source: Source, on_stage: OnStage | None = None) -> PipelineRe
 
     warnings: list[str] = []
     amount = parse_amount(extracted.amount)
-    if amount is None:
+    if amount is not None and amount > MAX_AMOUNT:
+        amount = None
+        warnings.append(texts.WARN_AMOUNT_TOO_LARGE)
+    elif amount is None:
         warnings.append(texts.WARN_BAD_AMOUNT if extracted.amount else texts.WARN_NO_AMOUNT)
 
     code = normalize_code(extracted.edrpou_rnokpp)
@@ -64,13 +82,18 @@ async def process(source: Source, on_stage: OnStage | None = None) -> PipelineRe
         warnings.append(texts.WARN_NO_CODE)
     elif code_kind == "invalid":
         warnings.append(texts.WARN_BAD_CODE)
+        code = None
 
     if not extracted.recipient_name:
         warnings.append(texts.WARN_NO_NAME)
     if not extracted.payment_purpose:
         warnings.append(texts.WARN_NO_PURPOSE)
 
-    qr = build_nbu_qr(extracted.recipient_name, iban, amount, code, extracted.payment_purpose)
+    try:
+        qr = build_nbu_qr(name=extracted.recipient_name, iban=iban, amount=amount, code=code,
+                          purpose=extracted.payment_purpose, style=RAHUNOK_STYLE)
+    except PayloadOverflowError:  # IBAN, amount and code are validated above, so only the name can overflow
+        return PipelineResult(ok=False, requisites=extracted, error=texts.ERR_NAME_TOO_LONG)
     if qr.truncated_purpose:
         warnings.append(texts.WARN_TRUNCATED_PURPOSE)
 
