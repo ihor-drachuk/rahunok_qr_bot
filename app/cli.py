@@ -6,10 +6,11 @@ import base64
 import sys
 from pathlib import Path
 
+from nbu_payment_qr import NBU_QR_PREFIX
+
 from app import card, llm, pipeline
 from app.config import load_config
 from app.llm import Source
-from app.qr import NBU_QR_PREFIX
 
 _MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
 

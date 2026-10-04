@@ -1,0 +1,3 @@
+[submodule "libs/nbu_payment_qr"]
+	path = libs/nbu_payment_qr
+	url = https://github.com/ihor-drachuk/nbu_payment_qr.git

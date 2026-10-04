@@ -1,5 +1,7 @@
 aiogram>=3.20,<4
-anthropic>=0.100
+anthropic>=0.100,<1
 pydantic>=2.7
 qrcode>=8.0
 pillow>=10.3
+# Must name the commit of the libs/nbu_payment_qr submodule (tests/test_library_pin.py).
+nbu_payment_qr @ https://github.com/ihor-drachuk/nbu_payment_qr/archive/7c375546b861a3a56825610c58c95aabf57f7581.tar.gz

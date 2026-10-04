@@ -18,11 +18,11 @@ Send the bot a PDF invoice, a screenshot, or plain text with requisites — it e
 2. **Extract** — the extraction model (`claude-opus-4-7` by default, see `RAHUNOK_QR_BOT_MODEL`) reads the PDF/image/text and returns structured requisites (the payment purpose is captured in full).
 3. **Verify** — an independent second call checks every extracted field against the source; on a mismatch the extraction is retried once, and a second mismatch aborts with an error instead of guessing.
 4. **Deterministic checks** — IBAN MOD-97 checksum (hard gate: no QR without a valid IBAN), EDRPOU/RNOKPP shape, amount parsing.
-5. **QR** — the NBU payload (14 fixed lines, CP1251, base64url, ≤331 bytes) is rendered as a QR code with error correction M.
+5. **QR** — the NBU payment QR is built by [`nbu_payment_qr`](https://github.com/ihor-drachuk/nbu_payment_qr) with error correction H, so the logo on the reply card does not break scanning.
 
 While the pipeline runs, the bot shows a live status message and removes it once the reply is ready. The ⚙️ in the status lines and the 🧾 in the result are custom emoji from the bot's own [emoji pack](https://t.me/addemoji/rahunok_qr_emoji), resolved at startup with a graceful fallback to plain emoji if a lookup fails.
 
-Missing optional fields (amount, name, purpose, code) still produce a QR plus a warning — e.g. without an amount the banking app simply asks the payer to enter it. The bot replies in Ukrainian.
+Missing optional fields, a malformed amount or code, and an amount above the QR limit are left out of the QR, with a warning. Without an amount, the banking app asks the payer to enter it. A recipient name too long for the QR ends with an error instead of a QR. The bot replies in Ukrainian.
 
 ## Supported inputs
 
@@ -44,6 +44,8 @@ Missing optional fields (amount, name, purpose, code) still produce a QR plus a 
 ## Run locally
 
 ```sh
+git clone --recurse-submodules https://github.com/ihor-drachuk/rahunok_qr_bot.git
+cd rahunok_qr_bot
 python -m venv .venv
 .venv/Scripts/pip install -r requirements.txt   # Linux/macOS: .venv/bin/pip
 set RAHUNOK_QR_BOT_TELEGRAM_TOKEN=...           # Linux/macOS: export

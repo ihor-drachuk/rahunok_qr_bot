@@ -1,7 +1,9 @@
 import asyncio
 import base64
+from decimal import Decimal
 
 import pytest
+from nbu_payment_qr import MAX_AMOUNT, NBU_QR_PREFIX, build_nbu_qr
 
 from app import llm, pipeline, texts
 from app.llm import Source
@@ -20,6 +22,11 @@ GOOD_REQUISITES = ExtractedRequisites(
 TEXT_SOURCE = Source(kind="text", text="реквізити")
 
 FIELD_NAMES = ["recipient_name", "iban", "edrpou_rnokpp", "amount", "payment_purpose"]
+
+
+def payload_lines(url: str) -> list[str]:
+    b64 = url.removeprefix(NBU_QR_PREFIX)
+    return base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode("cp1251").split("\n")
 
 
 def stage_collector() -> tuple[list[str], pipeline.OnStage]:
@@ -161,12 +168,79 @@ def test_missing_optional_fields_build_qr_with_warnings(monkeypatch):
                                     texts.WARN_NO_PURPOSE}
 
 
-def test_invalid_code_shape_warns_but_builds_qr(monkeypatch):
+def test_invalid_code_shape_warns_and_builds_qr_without_code(monkeypatch):
     requisites = GOOD_REQUISITES.model_copy(update={"edrpou_rnokpp": "12345"})
     LlmStub(monkeypatch, requisites, [verdict(True)])
     result = asyncio.run(pipeline.process(TEXT_SOURCE))
     assert result.ok
     assert result.warnings == [texts.WARN_BAD_CODE]
+    assert payload_lines(result.qr.url)[8] == ""
+
+
+def test_amount_above_qr_maximum_builds_qr_without_amount(monkeypatch):
+    requisites = GOOD_REQUISITES.model_copy(update={"amount": str(MAX_AMOUNT + Decimal("0.01"))})
+    LlmStub(monkeypatch, requisites, [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    assert result.ok
+    assert result.warnings == [texts.WARN_AMOUNT_TOO_LARGE]
+    assert result.card.amount is None
+    assert payload_lines(result.qr.url)[7] == ""
+
+
+def test_amount_at_qr_maximum_is_encoded(monkeypatch):
+    requisites = GOOD_REQUISITES.model_copy(update={"amount": str(MAX_AMOUNT)})
+    LlmStub(monkeypatch, requisites, [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    assert result.warnings == []
+    assert payload_lines(result.qr.url)[7] == "UAH9999999.99"
+
+
+@pytest.mark.parametrize("raw_amount", ["1E2", "+5", "1_000", ".5", "13727."])
+def test_non_plain_amount_builds_qr_without_amount(monkeypatch, raw_amount):
+    requisites = GOOD_REQUISITES.model_copy(update={"amount": raw_amount})
+    LlmStub(monkeypatch, requisites, [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    assert result.ok
+    assert result.warnings == [texts.WARN_BAD_AMOUNT]
+    assert payload_lines(result.qr.url)[7] == ""
+
+
+def test_name_too_long_for_payload_yields_error_and_no_qr(monkeypatch):
+    requisites = GOOD_REQUISITES.model_copy(update={"recipient_name": "А" * 400})
+    LlmStub(monkeypatch, requisites, [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    assert not result.ok
+    assert result.qr is None
+    assert result.error == texts.ERR_NAME_TOO_LONG
+    assert result.requisites is requisites
+
+
+def test_builder_error_other_than_overflow_is_not_reported_as_long_name(monkeypatch):
+    LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)])
+
+    def failing_build(**kwargs):
+        raise ValueError("unexpected")
+
+    monkeypatch.setattr(pipeline, "build_nbu_qr", failing_build)
+    with pytest.raises(ValueError, match="unexpected"):
+        asyncio.run(pipeline.process(TEXT_SOURCE))
+
+
+def test_iban_with_non_ascii_digits_yields_error_and_no_qr(monkeypatch):
+    fullwidth_iban = VALID_IBAN.translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+    LlmStub(monkeypatch, GOOD_REQUISITES.model_copy(update={"iban": fullwidth_iban}), [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    assert not result.ok
+    assert result.qr is None
+    assert result.error == texts.ERR_NO_IBAN
+
+
+def test_qr_is_rendered_in_rahunok_style(monkeypatch):
+    LlmStub(monkeypatch, GOOD_REQUISITES, [verdict(True)])
+    result = asyncio.run(pipeline.process(TEXT_SOURCE))
+    expected = build_nbu_qr(name=GOOD_REQUISITES.recipient_name, iban=VALID_IBAN, amount=Decimal("13727"),
+                            code="12345678", purpose=GOOD_REQUISITES.payment_purpose, style=pipeline.RAHUNOK_STYLE)
+    assert result.qr.image.tobytes() == expected.image.tobytes()
 
 
 def test_truncated_purpose_adds_warning(monkeypatch):
@@ -207,6 +281,4 @@ def test_iban_normalized_before_qr(monkeypatch, raw_iban):
     LlmStub(monkeypatch, requisites, [verdict(True)])
     result = asyncio.run(pipeline.process(TEXT_SOURCE))
     assert result.ok
-    b64 = result.qr.url.removeprefix("https://bank.gov.ua/qr/")
-    payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4)).decode("cp1251")
-    assert payload.split("\n")[6] == VALID_IBAN
+    assert payload_lines(result.qr.url)[6] == VALID_IBAN
