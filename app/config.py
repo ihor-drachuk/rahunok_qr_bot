@@ -2,17 +2,15 @@ import os
 from dataclasses import dataclass
 
 MAX_TOKENS = 16000
-GATE_MODEL = "claude-haiku-4-5"
+MODEL_EFFORT = "high"
+GATE_MODEL = "claude-haiku-5-5"
 GATE_MAX_TOKENS = 1024
+GATE_EFFORT = "low"
 ANTHROPIC_TIMEOUT_SECONDS = 120.0
 TELEGRAM_MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024  # Telegram Bot API file download limit (20 MB)
 
 # Extraction/validation model, selectable via RAHUNOK_QR_BOT_MODEL. The gate always runs on Haiku.
-_MODEL_CHOICES = {
-    "haiku": "claude-haiku-4-5",
-    "sonnet": "claude-sonnet-5",
-    "opus": "claude-opus-4-7",
-}
+_MODEL_CHOICES = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5", "opus": "claude-opus-5-5"}
 _DEFAULT_MODEL_CHOICE = "opus"
 
 

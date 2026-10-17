@@ -2,12 +2,17 @@
 
 import base64
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeVar
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, transform_schema
+from anthropic.types import Message
+from pydantic import BaseModel, ValidationError
 
-from app.config import ANTHROPIC_TIMEOUT_SECONDS, GATE_MAX_TOKENS, GATE_MODEL, MAX_TOKENS, Config
+from app.config import (ANTHROPIC_TIMEOUT_SECONDS, GATE_EFFORT, GATE_MAX_TOKENS, GATE_MODEL, MAX_TOKENS, MODEL_EFFORT,
+                        Config)
 from app.models import ExtractedRequisites, GateVerdict, ValidationVerdict
+
+T = TypeVar("T", bound=BaseModel)
 
 GATE_PROMPT = """\
 You are a gatekeeper for a payment-QR bot. Decide whether the provided document, image, or text plausibly \
@@ -95,26 +100,57 @@ def _content_blocks(source: Source, instruction: str) -> list[dict]:
     return [{"type": "text", "text": f"{instruction}\n\n<document>\n{source.text}\n</document>"}]
 
 
-async def _parse(source: Source, instruction: str, output_model, model: str, max_tokens: int):
-    response = await _client.messages.parse(
+class ModelOutputInvalid(Exception):
+    """The reply is not an answer. The message names why and never quotes the output, which may hold requisites:
+    a stop reason other than `end_turn`, `no_text_block` or `text_blocks=N`, or the schema error types and field
+    paths."""
+
+
+def _error_kinds(error: ValidationError) -> str:
+    return ", ".join(f"{e['type']}@{'.'.join(map(str, e['loc']))}" if e["loc"] else e["type"]
+                     for e in error.errors(include_url=False, include_context=False, include_input=False))
+
+
+def _output_config(output_model: type[BaseModel], effort: str) -> dict:
+    return {"effort": effort, "format": {"type": "json_schema", "schema": transform_schema(output_model)}}
+
+
+def _read_reply(message: Message, output_model: type[T]) -> T:
+    # `messages.parse` validates the text before the caller sees `stop_reason`, so a reply cut off or refused
+    # mid-JSON would read as a schema error. We read the raw reply instead, stop reason first.
+    if message.stop_reason != "end_turn":
+        raise ModelOutputInvalid(str(message.stop_reason))
+    texts = [block.text for block in message.content if block.type == "text"]
+    if len(texts) != 1:
+        raise ModelOutputInvalid("no_text_block" if not texts else f"text_blocks={len(texts)}")
+    try:
+        return output_model.model_validate_json(texts[0])
+    except ValidationError as error:
+        raise ModelOutputInvalid(_error_kinds(error)) from None  # a `ValidationError` quotes the output
+
+
+async def _parse(source: Source, instruction: str, output_model: type[T], model: str, max_tokens: int,
+                 effort: str) -> T:
+    message = await _client.messages.create(
         model=model,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": _content_blocks(source, instruction)}],
-        output_format=output_model,
+        output_config=_output_config(output_model, effort),
     )
-    if response.parsed_output is None:
-        raise RuntimeError("Model response did not match the expected schema")
-    return response.parsed_output
+    return _read_reply(message, output_model)
 
 
 async def gate(source: Source) -> GateVerdict:
-    return await _parse(source, GATE_PROMPT, GateVerdict, model=GATE_MODEL, max_tokens=GATE_MAX_TOKENS)
+    return await _parse(source, GATE_PROMPT, GateVerdict, model=GATE_MODEL, max_tokens=GATE_MAX_TOKENS,
+                        effort=GATE_EFFORT)
 
 
 async def extract(source: Source) -> ExtractedRequisites:
-    return await _parse(source, EXTRACTION_PROMPT, ExtractedRequisites, model=_model, max_tokens=MAX_TOKENS)
+    return await _parse(source, EXTRACTION_PROMPT, ExtractedRequisites, model=_model, max_tokens=MAX_TOKENS,
+                        effort=MODEL_EFFORT)
 
 
 async def validate(source: Source, extracted: ExtractedRequisites) -> ValidationVerdict:
     instruction = VALIDATION_PROMPT + extracted.model_dump_json(indent=2)
-    return await _parse(source, instruction, ValidationVerdict, model=_model, max_tokens=MAX_TOKENS)
+    return await _parse(source, instruction, ValidationVerdict, model=_model, max_tokens=MAX_TOKENS,
+                        effort=MODEL_EFFORT)

@@ -18,15 +18,15 @@ def _set_env(monkeypatch, **extra):
 
 def test_default_model_is_opus(monkeypatch):
     _set_env(monkeypatch)
-    assert load_config().model == "claude-opus-4-7"
+    assert load_config().model == "claude-opus-5-5"
 
 
 @pytest.mark.parametrize("choice,expected", [
-    ("haiku", "claude-haiku-4-5"),
-    ("sonnet", "claude-sonnet-5"),
-    ("opus", "claude-opus-4-7"),
-    ("OPUS", "claude-opus-4-7"),
-    (" opus ", "claude-opus-4-7"),
+    ("haiku", "claude-haiku-5-5"),
+    ("sonnet", "claude-sonnet-5-5"),
+    ("opus", "claude-opus-5-5"),
+    ("OPUS", "claude-opus-5-5"),
+    (" opus ", "claude-opus-5-5"),
 ])
 def test_model_choice_resolves(monkeypatch, choice, expected):
     _set_env(monkeypatch, RAHUNOK_QR_BOT_MODEL=choice)
@@ -41,7 +41,7 @@ def test_invalid_model_choice_raises(monkeypatch):
 
 def test_cli_override_beats_env(monkeypatch):
     _set_env(monkeypatch, RAHUNOK_QR_BOT_MODEL="haiku")
-    assert load_config(model_override="sonnet").model == "claude-sonnet-5"
+    assert load_config(model_override="sonnet").model == "claude-sonnet-5-5"
 
 
 def test_stage_mode_defaults_off(monkeypatch):

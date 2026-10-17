@@ -14,8 +14,8 @@ Send the bot a PDF invoice, a screenshot, or plain text with requisites — it e
 
 ## How it works
 
-1. **Gate** — a cheap `claude-haiku-4-5` call checks the message plausibly contains payment requisites at all; casual chat and unrelated files are politely turned away without running the expensive models.
-2. **Extract** — the extraction model (`claude-opus-4-7` by default, see `RAHUNOK_QR_BOT_MODEL`) reads the PDF/image/text and returns structured requisites (the payment purpose is captured in full).
+1. **Gate** — a cheap `claude-haiku-5-5` call checks the message plausibly contains payment requisites at all; casual chat and unrelated files are politely turned away without running the expensive models.
+2. **Extract** — the extraction model (`claude-opus-5-5` by default, see `RAHUNOK_QR_BOT_MODEL`) reads the PDF/image/text and returns structured requisites (the payment purpose is captured in full).
 3. **Verify** — an independent second call checks every extracted field against the source; on a mismatch the extraction is retried once, and a second mismatch aborts with an error instead of guessing.
 4. **Deterministic checks** — IBAN MOD-97 checksum (hard gate: no QR without a valid IBAN), EDRPOU/RNOKPP shape, amount parsing.
 5. **QR** — the NBU payload (14 fixed lines, CP1251, base64url, ≤331 bytes) is rendered as a QR code with error correction M.
