@@ -1,8 +1,10 @@
 """All Ukrainian user-facing strings and reply formatting."""
 
+import re
 from decimal import Decimal
 
 from aiogram import html
+from aiogram.types import User
 
 from app import emoji
 
@@ -31,8 +33,12 @@ HELP = (
     "Підтримувані вхідні дані:\n"
     "• PDF-документ\n"
     "• Фото або зображення (PNG/JPEG)\n"
-    "• Текстове повідомлення з реквізитами"
+    "• Текстове повідомлення з реквізитами\n\n"
+    "Питання чи пропозиції — /contact"
 )
+
+COMMAND_HELP_DESCRIPTION = "Як користуватися ботом"
+COMMAND_CONTACT_DESCRIPTION = "Написати розробнику"
 
 # Status lines are built on demand so the ⚙️ can render as the pack's custom emoji once resolved.
 def status_searching() -> str:
@@ -132,3 +138,63 @@ def format_error(error: str, requisites) -> str:
         if found:
             text += "\n\nЗнайдені поля:\n" + found
     return text
+
+
+def contact_prompt(minutes: int) -> str:
+    return (
+        "✉️ Напишіть повідомлення для розробника — можна з фото, файлами чи альбомом. "
+        f"Я передам наступне ваше повідомлення, надіслане протягом {minutes} хв."
+    )
+
+
+CONTACT_CANCEL_LABEL = "Скасувати"
+CONTACT_CANCELLED = "Добре, скасовано."
+CONTACT_NOTHING_TO_CANCEL = "Немає чого скасовувати."
+FEEDBACK_SENT = "✅ Дякую! Передав розробнику."
+FEEDBACK_COOLDOWN = "⏳ Зачекайте, будь ласка, пів хвилини й надішліть /contact ще раз."
+FEEDBACK_FAILED = "❌ Не вдалося переслати таке повідомлення. Спробуйте ще раз через /contact — текстом або іншим файлом."
+REPORT_COOLDOWN = "⏳ Зачекайте, будь ласка, пів хвилини й спробуйте ще раз."
+
+REPORT_DOCUMENT_LABEL = "📤 Надіслати документ розробнику"
+REPORT_MESSAGE_LABEL = "📤 Надіслати повідомлення розробнику"
+REPORT_CONFIRM_LABEL = "✅ Так, надіслати"
+REPORT_DECLINE_LABEL = "✖️ Не треба"
+REPORT_SENT = "✅ Надіслано розробнику"
+REPORT_SOURCE_GONE = "Не вдалося: повідомлення вже видалено"
+REPORT_FAILED = "Не вдалося надіслати. Спробуйте, будь ласка, пізніше."
+REPORT_EXPIRED = "Це повідомлення вже застаріло"
+
+DEVELOPER_REPLY_INTRO = "💬 Це відповідь розробника. Щоб відповісти, надішліть /contact."
+DEVELOPER_REPLY_HINT = "↩️ Щоб відповісти, зробіть Reply саме на заголовок з ID."
+DEVELOPER_REPLY_DELIVERED = "✅ Доставлено"
+DEVELOPER_REPLY_BLOCKED = "❌ Не доставлено: користувач заблокував бота"
+DEVELOPER_REPLY_FAILED = "❌ Не доставлено: помилка Telegram"
+
+_FEEDBACK_HEADER_ID = re.compile(r"^ID: (\d+) · ([0-9a-f]+)$", re.MULTILINE)
+
+
+def format_report_sent(reply_html: str) -> str:
+    return f"{reply_html}\n\n{REPORT_SENT}"
+
+
+def format_feedback_header(user: User, signature: str) -> str:
+    return _feedback_header("📨 Повідомлення від користувача", user, signature, [])
+
+
+def format_report_header(user: User, signature: str, error: str, is_text: bool) -> str:
+    title = "📨 Повідомлення, яке бот не розпізнав" if is_text else "📨 Документ, який бот не розпізнав"
+    return _feedback_header(title, user, signature, [f"Помилка: {html.quote(error)}"])
+
+
+def _feedback_header(title: str, user: User, signature: str, extra_lines: list[str]) -> str:
+    # We put the ID line before the name and the error text, so that `parse_feedback_address` finds it first,
+    # even when a later line looks like one.
+    sender = html.quote(user.full_name) + (f" (@{user.username})" if user.username else "")
+    id_line = f"ID: {html.code(str(user.id))} · {html.code(signature)}"
+    lines = [title, id_line, f"Від: {sender}", *extra_lines, "↩️ Reply на це повідомлення — відповідь отримає користувач."]
+    return "\n".join(lines)
+
+
+def parse_feedback_address(header_text: str) -> tuple[int, str] | None:
+    match = _FEEDBACK_HEADER_ID.search(header_text)
+    return (int(match.group(1)), match.group(2)) if match else None

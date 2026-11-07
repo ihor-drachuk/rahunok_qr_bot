@@ -4,11 +4,12 @@ from unittest.mock import AsyncMock, call
 from nbu_payment_qr import QrResult
 from PIL import Image
 
-from app import card, handlers, pipeline, texts
+from app import card, feedback, handlers, pipeline, texts
 from app.card import CardText
 from app.llm import Source
 from app.models import ExtractedRequisites
 from app.pipeline import PipelineResult
+from tests.telegram_fakes import make_bot, message_update
 
 VALID_IBAN = "UA693000010000000012345678901"
 TEXT_SOURCE = Source(kind="text", text="реквізити")
@@ -17,8 +18,12 @@ QR = QrResult(image=Image.new("RGBA", (4, 4)), url="https://bank.gov.ua/qr/x", p
 CARD = CardText(subtitle="s", call_to_action="c", recipient="ТОВ", amount="1.00 грн")
 
 
+SOURCE_MESSAGE_ID = 7
+
+
 def make_message() -> AsyncMock:
     message = AsyncMock()
+    message.message_id = SOURCE_MESSAGE_ID
     message.answer.return_value = AsyncMock()  # the temporary status message, deleted in finally
     return message
 
@@ -87,6 +92,22 @@ def test_pipeline_failure_sends_error_and_no_photo(monkeypatch):
     message.answer_photo.assert_not_awaited()
     assert message.answer.await_count == 2  # status message + error text
     assert message.answer.await_args_list[1].args == (texts.format_error(texts.ERR_NO_IBAN, requisites),)
+    report_button = message.answer.await_args_list[1].kwargs["reply_markup"]
+    assert report_button == feedback.report_keyboard(SOURCE_MESSAGE_ID, is_text=True)
+
+
+def test_pipeline_failure_on_document_gets_document_report_button(monkeypatch):
+    result = PipelineResult(ok=False, requisites=None, error=texts.ERR_NOT_PAYMENT)
+    message = make_message()
+
+    async def fake_process(source, on_stage=None):
+        return result
+
+    monkeypatch.setattr(pipeline, "process", fake_process)
+    asyncio.run(handlers._process_and_reply(message, Source(kind="pdf", data=b"%PDF"), False))
+
+    report_button = message.answer.await_args_list[-1].kwargs["reply_markup"]
+    assert report_button == feedback.report_keyboard(SOURCE_MESSAGE_ID, is_text=False)
 
 
 def test_stage_updates_edit_the_single_status_message(monkeypatch):
@@ -152,6 +173,7 @@ def test_status_deleted_even_when_processing_raises(monkeypatch):
     asyncio.run(handlers._process_and_reply(message, TEXT_SOURCE, False))
 
     assert message.answer.await_args_list[1].args == (texts.ERR_UNEXPECTED,)
+    assert message.answer.await_args_list[1].kwargs["reply_markup"] == feedback.report_keyboard(SOURCE_MESSAGE_ID, True)
     message.answer.return_value.delete.assert_awaited_once()
 
 
@@ -173,24 +195,16 @@ def test_stage_mode_is_forwarded_to_card_builder(monkeypatch):
     assert captured == [True]
 
 
-def test_dispatcher_injects_stage_mode_into_handlers(monkeypatch):
-    # Drives a real Update through a real Dispatcher, pinning the workflow-data -> handler-param seam.
-    from datetime import UTC, datetime
-
-    from aiogram import Bot, Dispatcher
-    from aiogram.types import Chat, Message as TgMessage, Update
-
+def test_dispatcher_injects_stage_mode_into_handlers(dispatcher, monkeypatch):
+    # The conftest dispatcher is built with stage_mode=True.
     captured = []
 
     async def fake_process_and_reply(message, source, stage_mode):
         captured.append(stage_mode)
 
     monkeypatch.setattr(handlers, "_process_and_reply", fake_process_and_reply)
-    dispatcher = Dispatcher(stage_mode=True)
-    dispatcher.include_router(handlers.router)
-    update = Update(update_id=1, message=TgMessage(message_id=1, date=datetime.now(UTC),
-                                                   chat=Chat(id=1, type="private"), text="реквізити"))
-    asyncio.run(dispatcher.feed_update(Bot("42:TEST"), update))
+    bot, _ = make_bot()
+    asyncio.run(dispatcher.feed_update(bot, message_update(text="реквізити")))
     assert captured == [True]
 
 
@@ -226,5 +240,6 @@ def test_anthropic_error_reported_and_status_deleted(monkeypatch):
 
     assert message.answer.await_count == 2  # status message + network error text
     assert message.answer.await_args_list[1].args == (texts.ERR_NETWORK,)
+    assert "reply_markup" not in message.answer.await_args_list[1].kwargs
     message.answer.return_value.delete.assert_awaited_once()
     message.answer_photo.assert_not_awaited()

@@ -1,7 +1,10 @@
+import html as html_lib
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 
 import pytest
+from aiogram.types import User
 
 from app import emoji, texts
 from app.models import ExtractedRequisites
@@ -146,3 +149,46 @@ def test_set_custom_emoji_ids_replaces_rather_than_merges():
         assert emoji.render("🧾") == '<tg-emoji emoji-id="NEW_RECEIPT">🧾</tg-emoji>'
     finally:
         emoji.set_custom_emoji_ids({})
+
+
+FEEDBACK_USER = User(id=1001, is_bot=False, first_name="Олена <b>", last_name="&Ко", username="olena")
+
+
+def _as_telegram_text(html_text: str) -> str:
+    # What Telegram puts into Message.text for a message the bot sent as HTML.
+    return html_lib.unescape(re.sub(r"<[^>]+>", "", html_text))
+
+
+def test_feedback_header_escapes_name_and_shows_username():
+    header = texts.format_feedback_header(FEEDBACK_USER, "abc123")
+    assert "Від: Олена &lt;b&gt; &amp;Ко (@olena)" in header
+    assert "ID: <code>1001</code> · <code>abc123</code>" in header
+
+
+def test_feedback_header_address_round_trips():
+    header = _as_telegram_text(texts.format_feedback_header(FEEDBACK_USER, "abc123"))
+    assert texts.parse_feedback_address(header) == (1001, "abc123")
+
+
+def test_report_header_address_wins_over_id_in_error_text():
+    header = _as_telegram_text(texts.format_report_header(FEEDBACK_USER, "abc123", "ID: 9 · ffff", is_text=False))
+    assert "Помилка: ID: 9 · ffff" in header
+    assert texts.parse_feedback_address(header) == (1001, "abc123")
+
+
+@pytest.mark.parametrize("is_text,title", [(True, "📨 Повідомлення, яке бот не розпізнав"),
+                                           (False, "📨 Документ, який бот не розпізнав")])
+def test_report_header_title_follows_source_kind(is_text, title):
+    header = texts.format_report_header(FEEDBACK_USER, "abc123", "", is_text=is_text)
+    assert header.startswith(title + "\n")
+    assert "Помилка: \n" in header
+
+
+@pytest.mark.parametrize("minutes", [15, 7])
+def test_contact_prompt_states_time_limit(minutes):
+    assert f"протягом {minutes} хв." in texts.contact_prompt(minutes)
+
+
+def test_parse_feedback_address_without_id_line_is_none():
+    assert texts.parse_feedback_address("Дякую за бота! ID: 5 · abc") is None
+    assert texts.parse_feedback_address("ID: 5") is None

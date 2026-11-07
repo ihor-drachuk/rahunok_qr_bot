@@ -1,5 +1,6 @@
 """Telegram handlers: content routing, download, replies, error messaging."""
 
+import asyncio
 import html as html_lib
 import io
 import logging
@@ -12,7 +13,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import BufferedInputFile, LinkPreviewOptions, Message
 
-from app import card, pipeline, texts
+from app import card, feedback, pipeline, texts
 from app.config import TELEGRAM_MAX_DOWNLOAD_BYTES
 from app.llm import Source
 
@@ -36,6 +37,15 @@ router = Router()
 @router.message(Command("help"))
 async def on_start(message: Message) -> None:
     await message.answer(texts.HELP)
+
+
+@router.message(F.media_group_id)
+async def on_album(message: Message, album: list[Message], bot: Bot, stage_mode: bool) -> None:
+    supported = [item for item in album if item.document or item.photo]
+    if len(supported) < len(album):
+        await message.answer(texts.ERR_UNSUPPORTED_TYPE)
+    await asyncio.gather(*(on_document(item, bot, stage_mode) if item.document else on_photo(item, bot, stage_mode)
+                           for item in supported))
 
 
 @router.message(F.document)
@@ -94,10 +104,13 @@ async def _process_and_reply(message: Message, source: Source, stage_mode: bool)
             else:
                 await status.edit_text(text)
 
+    # We add the report button only where the document may be at fault, not to transient errors
+    # (rate limit, network, Anthropic API, Telegram).
+    report_button = feedback.report_keyboard(message.message_id, is_text=source.kind == "text")
     try:
         result = await pipeline.process(source, on_stage)
         if not result.ok:
-            await message.answer(texts.format_error(result.error, result.requisites))
+            await message.answer(texts.format_error(result.error, result.requisites), reply_markup=report_button)
             return
         text = texts.format_success(result.requisites, result.warnings, result.qr)
         card_png = card.build_card(result.qr.image, result.card, stage_mode)
@@ -121,7 +134,7 @@ async def _process_and_reply(message: Message, source: Source, stage_mode: bool)
         await message.answer(texts.ERR_TELEGRAM)
     except Exception:
         logger.exception("Unexpected error during processing")
-        await message.answer(texts.ERR_UNEXPECTED)
+        await message.answer(texts.ERR_UNEXPECTED, reply_markup=report_button)
     finally:
         # Deleted last so the status message stays visible until the reply has been sent.
         if status is not None:

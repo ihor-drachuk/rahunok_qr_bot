@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 MAX_TOKENS = 16000
 MODEL_EFFORT = "high"
@@ -54,3 +54,20 @@ def load_config(model_override: str | None = None, stage_override: bool | None =
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     return Config(telegram_bot_token=token, anthropic_api_key=api_key, model=_resolve_model(model_override),
                   stage_mode=_resolve_stage_mode(stage_override))
+
+
+@dataclass(frozen=True)
+class BotConfig(Config):
+    feedback_chat_id: int  # chat for /contact messages, reports and developer replies, negative for a group
+
+
+def load_bot_config() -> BotConfig:
+    config = load_config()
+    raw = os.environ.get("RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID", "").strip()
+    if not raw:
+        raise RuntimeError("Missing required environment variables: RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID")
+    try:
+        feedback_chat_id = int(raw)
+    except ValueError:
+        raise RuntimeError(f"Invalid RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID value {raw!r}; expected a Telegram chat ID") from None
+    return BotConfig(**asdict(config), feedback_chat_id=feedback_chat_id)

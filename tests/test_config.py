@@ -1,6 +1,6 @@
 import pytest
 
-from app.config import load_config
+from app.config import load_bot_config, load_config
 
 ENV = {
     "RAHUNOK_QR_BOT_TELEGRAM_TOKEN": "token",
@@ -75,3 +75,37 @@ def test_missing_required_vars_raise(monkeypatch):
     monkeypatch.delenv("RAHUNOK_QR_BOT_ANTHROPIC_API_KEY", raising=False)
     with pytest.raises(RuntimeError, match="RAHUNOK_QR_BOT_TELEGRAM_TOKEN"):
         load_config()
+
+
+def test_cli_config_does_not_need_feedback_chat(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.delenv("RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID", raising=False)
+    assert load_config().model == "claude-opus-5-5"
+
+
+@pytest.mark.parametrize("value", ["", "  "])
+def test_bot_config_requires_feedback_chat(monkeypatch, value):
+    _set_env(monkeypatch, RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID=value)
+    with pytest.raises(RuntimeError, match="Missing required environment variables: RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID"):
+        load_bot_config()
+
+
+def test_bot_config_without_feedback_chat_var_raises(monkeypatch):
+    _set_env(monkeypatch)
+    monkeypatch.delenv("RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID", raising=False)
+    with pytest.raises(RuntimeError, match="RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID"):
+        load_bot_config()
+
+
+def test_bot_config_rejects_non_numeric_feedback_chat(monkeypatch):
+    _set_env(monkeypatch, RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID="@ihor")
+    with pytest.raises(RuntimeError, match="Invalid RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID"):
+        load_bot_config()
+
+
+@pytest.mark.parametrize("value,expected", [("123456789", 123456789), (" -1001234567890 ", -1001234567890)])
+def test_bot_config_parses_feedback_chat(monkeypatch, value, expected):
+    _set_env(monkeypatch, RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID=value, RAHUNOK_QR_BOT_STAGE="true")
+    cfg = load_bot_config()
+    assert cfg.feedback_chat_id == expected
+    assert (cfg.telegram_bot_token, cfg.anthropic_api_key, cfg.stage_mode) == ("token", "key", True)
