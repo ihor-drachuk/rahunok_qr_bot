@@ -227,11 +227,18 @@ async def on_message_while_waiting(message: Message, album: list[Message], bot: 
     await _deliver(message, bot, feedback_chat_id, album)
 
 
+async def _answer_callback(callback: CallbackQuery, text: str | None = None) -> None:
+    # A callback answer is cosmetic, and Telegram rejects one for an old press, for example from before a restart,
+    # so we never let its failure stop the handler.
+    with suppress(TelegramAPIError):
+        await callback.answer(text)
+
+
 @router.callback_query(F.data == CONTACT_CANCEL_DATA)
 async def on_cancel_button(callback: CallbackQuery, bot: Bot) -> None:
     chat_id, pressed_message_id = callback.message.chat.id, callback.message.message_id
     wait = _waits.pop((chat_id, callback.from_user.id), None)
-    await callback.answer()
+    await _answer_callback(callback)
     await _end_prompt(wait, bot)
     if wait is not None and not wait.is_expired(datetime.now(UTC)):  # a button press carries no send time
         await bot.send_message(chat_id, texts.CONTACT_CANCELLED)
@@ -243,12 +250,12 @@ async def on_cancel_button(callback: CallbackQuery, bot: Bot) -> None:
 async def on_report_button(callback: CallbackQuery, callback_data: ReportCallback, bot: Bot, feedback_chat_id: int) -> None:
     reply = callback.message
     if not isinstance(reply, Message):  # an `InaccessibleMessage` cannot be edited
-        await callback.answer(texts.REPORT_EXPIRED)
+        await _answer_callback(callback, texts.REPORT_EXPIRED)
         return
     if callback_data.action is ReportAction.CONFIRM:
         await _confirm_report(callback, callback_data, reply, bot, feedback_chat_id)
         return
-    await callback.answer()
+    await _answer_callback(callback)
     if callback_data.action is ReportAction.ASK:
         markup = _confirm_keyboard(callback_data.message_id, callback_data.is_text)
     else:
@@ -261,7 +268,7 @@ async def _confirm_report(callback: CallbackQuery, callback_data: ReportCallback
                           feedback_chat_id: int) -> None:
     user = callback.from_user
     if not _cooldown.try_take(user.id):
-        await callback.answer(texts.REPORT_COOLDOWN)
+        await _answer_callback(callback, texts.REPORT_COOLDOWN)
         return
     error_line = (reply.text or "").split("\n", 1)[0]
     header = texts.format_report_header(user, _reply_signature(bot, user.id), error_line, callback_data.is_text)
@@ -271,10 +278,10 @@ async def _confirm_report(callback: CallbackQuery, callback_data: ReportCallback
         _cooldown.release(user.id)
         logger.error("Failed to deliver report from user %s: %s", user.id, type(e).__name__)
         # A copy of a deleted message yields nothing, so we name that cause.
-        await callback.answer(texts.REPORT_SOURCE_GONE if isinstance(e, _NothingCopied) else texts.REPORT_FAILED)
+        await _answer_callback(callback, texts.REPORT_SOURCE_GONE if isinstance(e, _NothingCopied) else texts.REPORT_FAILED)
         return
     logger.info("Report delivered from user %s", user.id)
-    await callback.answer()
+    await _answer_callback(callback)
     # The report is already delivered, so we ignore a failed edit and accept that the buttons stay,
     # and Confirm can send the report again once the cooldown is over.
     with suppress(TelegramAPIError):

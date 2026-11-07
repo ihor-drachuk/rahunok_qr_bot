@@ -55,7 +55,8 @@ async def main() -> None:
         dispatcher = build_dispatcher(cfg.stage_mode, cfg.feedback_chat_id)
         await emoji_pack.resolve_custom_emoji(bot)
         await _set_commands(bot)
-        await bot.delete_webhook(drop_pending_updates=True)
+        # We keep updates sent while the bot was down, otherwise messages sent during a deploy would get no reply.
+        await bot.delete_webhook(drop_pending_updates=False)
         await dispatcher.start_polling(bot)
 
 

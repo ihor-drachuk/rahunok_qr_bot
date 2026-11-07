@@ -499,6 +499,41 @@ def test_report_on_inaccessible_message_says_expired(dispatcher):
     assert session.calls(CopyMessages) == []
 
 
+def test_report_confirm_finishes_when_old_press_cannot_be_answered(dispatcher):
+    bot, session = make_bot()
+    too_old = TelegramBadRequest(method=None, message="Bad Request: query is too old and response timeout expired")
+    session.fail = lambda method: too_old if isinstance(method, AnswerCallbackQuery) else None
+    asyncio.run(dispatcher.feed_update(bot, callback_update(report_data(ReportAction.CONFIRM), error_reply())))
+
+    assert len(sent_texts(session, DEVELOPER_CHAT_ID)) == 1
+    [edit] = session.calls(EditMessageText)
+    assert edit.text.endswith(texts.REPORT_SENT)
+
+
+@pytest.mark.parametrize("action", [ReportAction.ASK, ReportAction.DECLINE])
+def test_report_button_switches_keyboard_when_old_press_cannot_be_answered(dispatcher, action):
+    bot, session = make_bot()
+    too_old = TelegramBadRequest(method=None, message="Bad Request: query is too old and response timeout expired")
+    session.fail = lambda method: too_old if isinstance(method, AnswerCallbackQuery) else None
+    asyncio.run(dispatcher.feed_update(bot, callback_update(report_data(action), error_reply())))
+
+    assert len(session.calls(EditMessageReplyMarkup)) == 1
+
+
+def test_cancel_button_finishes_when_old_press_cannot_be_answered(dispatcher, pipeline_calls):
+    bot, session = make_bot()
+    too_old = TelegramBadRequest(method=None, message="Bad Request: query is too old and response timeout expired")
+    session.fail = lambda method: too_old if isinstance(method, AnswerCallbackQuery) else None
+
+    async def scenario():
+        await dispatcher.feed_update(bot, message_update(text="/contact"))
+        await dispatcher.feed_update(bot, callback_update(feedback.CONTACT_CANCEL_DATA, session.sent_messages[0]))
+
+    asyncio.run(scenario())
+
+    assert sent_texts(session, USER.id)[-1] == texts.CONTACT_CANCELLED
+
+
 def test_report_confirm_for_text_source_titles_header_as_message(dispatcher):
     bot, session = make_bot()
     data = report_data(ReportAction.CONFIRM, is_text=True)

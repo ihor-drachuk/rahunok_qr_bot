@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import GetChat
+from aiogram.methods import DeleteWebhook, GetChat
 
 from app import main
 from app.config import BotConfig
@@ -39,6 +39,31 @@ def test_startup_uses_bot_config_that_requires_feedback_chat(monkeypatch):
     monkeypatch.delenv("RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID", raising=False)
     with pytest.raises(RuntimeError, match="RAHUNOK_QR_BOT_FEEDBACK_CHAT_ID"):
         asyncio.run(main.main())
+
+
+def test_startup_keeps_updates_sent_while_bot_was_down(monkeypatch):
+    cfg = BotConfig(telegram_bot_token="42:TEST", anthropic_api_key="key", model="claude-opus-5-5", stage_mode=False,
+                    feedback_chat_id=DEVELOPER_CHAT_ID)
+    bot, session = make_bot()
+    webhook_deletes_before_polling = []
+
+    class FakeDispatcher:
+        async def start_polling(self, polling_bot):
+            webhook_deletes_before_polling.append(len(session.calls(DeleteWebhook)))
+
+    async def no_emoji(polling_bot):
+        pass
+
+    monkeypatch.setattr(main, "load_bot_config", lambda: cfg)
+    monkeypatch.setattr(main.llm, "init", lambda config: None)
+    monkeypatch.setattr(main, "Bot", lambda token, default: bot)
+    monkeypatch.setattr(main, "build_dispatcher", lambda stage_mode, feedback_chat_id: FakeDispatcher())
+    monkeypatch.setattr(main.emoji_pack, "resolve_custom_emoji", no_emoji)
+    asyncio.run(main.main())
+
+    [delete_webhook] = session.calls(DeleteWebhook)
+    assert delete_webhook.drop_pending_updates is False
+    assert webhook_deletes_before_polling == [1]
 
 
 def test_reachable_feedback_chat_passes_startup_check():
