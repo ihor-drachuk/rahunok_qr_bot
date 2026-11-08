@@ -21,7 +21,7 @@ from qrcode.constants import ERROR_CORRECT_H
 from app import llm, texts
 from app.card import CardText
 from app.llm import Source
-from app.models import FIELD_NAMES, PURPOSE_FIELD_NAMES, ExtractedRequisites, FieldVerdict, PurposeValidationVerdict, ValidationVerdict
+from app.models import ExtractedRequisites, PurposeValidationVerdict
 
 # Blue to teal radial gradient. Error correction H keeps the QR readable under the card's centered logo.
 RAHUNOK_STYLE = QrStyle(error_correction=ERROR_CORRECT_H, center_color=(30, 90, 168), edge_color=(18, 130, 120))
@@ -35,10 +35,6 @@ class PipelineResult:
     requisites: ExtractedRequisites | None = None
     warnings: list[str] = field(default_factory=list)
     error: str | None = None
-
-
-def _matches(verdict: ValidationVerdict) -> bool:
-    return verdict.all_match and all(f.matches for f in verdict.fields)
 
 
 OnStage = Callable[[str], Awaitable[None]]
@@ -58,24 +54,19 @@ async def process(source: Source, on_stage: OnStage | None = None) -> PipelineRe
     extracted = await llm.extract(source)
     await stage(texts.status_validating())
     verdict = await llm.validate(source, extracted)
-    if not _matches(verdict):
+    if not verdict.all_match:
         await stage(texts.status_retrying())
         extracted = await llm.extract(source)
         verdict = await llm.validate(source, extracted)
-        if not _matches(verdict):
+        if not verdict.all_match:
             return PipelineResult(ok=False, requisites=extracted, error=texts.ERR_UNRELIABLE)
     return _build(extracted)
 
 
-def _all_fields_match(verdicts: list[FieldVerdict], names: tuple[str, ...]) -> bool:
-    # We count a field that a verdict leaves out as a mismatch, because the verdict has not checked it.
-    return all(v.matches for v in verdicts) and {v.field for v in verdicts} >= set(names)
-
-
 def _purpose_mismatch(verdict: PurposeValidationVerdict) -> str | None:
-    if not _all_fields_match(verdict.requisites, FIELD_NAMES):
+    if not verdict.requisites.all_match:
         return texts.ERR_REQUISITES_CHANGED
-    if not _all_fields_match(verdict.purpose, PURPOSE_FIELD_NAMES):
+    if not verdict.purpose.all_match:
         return texts.ERR_PURPOSE_UNRELIABLE
     return None
 

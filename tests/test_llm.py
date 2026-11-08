@@ -9,7 +9,9 @@ import pytest
 
 from app import llm
 from app.llm import Source, _content_blocks
-from app.models import ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict, ValidationVerdict
+from app.models import (Checks, ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict,
+                        PurposeVerdict, RequisitesVerdict)
+from tests.test_pipeline import checks
 
 PDF_BYTES = b"%PDF-1.4 fake"
 PNG_BYTES = b"\x89PNG fake"
@@ -68,6 +70,49 @@ def _output_config(model, effort):
     return {"effort": effort, "format": {"type": "json_schema", "schema": anthropic.transform_schema(model)}}
 
 
+@pytest.mark.parametrize("model", Checks.__subclasses__())
+def test_verdict_schema_requires_every_field(model):
+    schema = anthropic.transform_schema(model)
+    assert schema["required"] == list(model.model_fields)
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["FieldCheck"]["required"] == ["matches"]
+    assert all(field == {"$ref": "#/$defs/FieldCheck"} for field in schema["properties"].values())
+
+
+def test_purpose_verdict_schema_requires_both_groups():
+    schema = anthropic.transform_schema(PurposeValidationVerdict)
+    assert schema["required"] == ["requisites", "purpose"]
+    assert schema["properties"] == {"requisites": {"$ref": "#/$defs/RequisitesVerdict"},
+                                    "purpose": {"$ref": "#/$defs/PurposeVerdict"}}
+
+
+def test_purpose_verdict_reply_missing_field_is_not_answer(api):
+    answers, _ = api
+    reply = PurposeValidationVerdict(requisites=checks(RequisitesVerdict), purpose=checks(PurposeVerdict)).model_dump()
+    del reply["purpose"]["item_name"]
+    answers.append((json.dumps(reply), "end_turn"))
+    fields = PurposeFields(invoice_number="00007", goods_kind="goods")
+    with pytest.raises(llm.ModelOutputInvalid) as raised:
+        asyncio.run(llm.validate_purpose(Source(kind="text", text="Рахунок № 00007"), ExtractedRequisites(iban="UA00"), fields))
+    assert str(raised.value) == "missing@purpose.item_name"
+
+
+def test_verdicts_check_every_extracted_field_except_invoice_reference_and_notes():
+    assert set(ExtractedRequisites.model_fields) - set(RequisitesVerdict.model_fields) == {"has_invoice_reference", "notes"}
+    assert set(RequisitesVerdict.model_fields) <= set(ExtractedRequisites.model_fields)
+    assert set(PurposeVerdict.model_fields) == set(PurposeFields.model_fields)
+
+
+def test_verdict_reply_missing_field_is_not_answer(api):
+    answers, _ = api
+    reply = checks(RequisitesVerdict).model_dump()
+    del reply["payment_purpose"]
+    answers.append((json.dumps(reply), "end_turn"))
+    with pytest.raises(llm.ModelOutputInvalid) as raised:
+        asyncio.run(llm.validate(Source(kind="text", text="IBAN UA00"), ExtractedRequisites(iban="UA00")))
+    assert str(raised.value) == "missing@payment_purpose"
+
+
 def test_gate_runs_on_haiku_at_low_effort(api):
     answers, bodies = api
     answers.append(('{"contains_requisites": true}', "end_turn"))
@@ -79,7 +124,7 @@ def test_gate_runs_on_haiku_at_low_effort(api):
 
 def test_extract_and_validate_run_on_configured_model_at_high_effort(api):
     answers, bodies = api
-    verdict = ValidationVerdict(fields=[], all_match=True)
+    verdict = checks(RequisitesVerdict)
     answers += [('{"iban": "UA00"}', "end_turn"), (verdict.model_dump_json(), "end_turn")]
     source = Source(kind="text", text="IBAN UA00")
     extracted = asyncio.run(llm.extract(source))
@@ -87,14 +132,14 @@ def test_extract_and_validate_run_on_configured_model_at_high_effort(api):
     assert asyncio.run(llm.validate(source, extracted)) == verdict
     assert [(b["model"], b["max_tokens"], b["output_config"]) for b in bodies] == [
         ("claude-sonnet-5-5", 16000, _output_config(ExtractedRequisites, "high")),
-        ("claude-sonnet-5-5", 16000, _output_config(ValidationVerdict, "high")),
+        ("claude-sonnet-5-5", 16000, _output_config(RequisitesVerdict, "high")),
     ]
 
 
 def test_purpose_calls_run_on_configured_model_and_validate_only_requisite_fields(api):
     answers, bodies = api
     fields = PurposeFields(invoice_number="00007", invoice_date="12.10.2026", goods_kind="goods")
-    verdict = PurposeValidationVerdict(requisites=[], purpose=[])
+    verdict = PurposeValidationVerdict(requisites=checks(RequisitesVerdict), purpose=checks(PurposeVerdict))
     answers += [(fields.model_dump_json(), "end_turn"), (verdict.model_dump_json(), "end_turn")]
     source = Source(kind="text", text="Рахунок № 00007 від 12.10.2026")
     requisites = ExtractedRequisites(iban="UA00", has_invoice_reference=True, notes="примітка")

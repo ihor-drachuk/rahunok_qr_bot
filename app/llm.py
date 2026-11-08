@@ -11,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import (ANTHROPIC_TIMEOUT_SECONDS, GATE_EFFORT, GATE_MAX_TOKENS, GATE_MODEL, MAX_TOKENS, MODEL_EFFORT,
                         Config)
-from app.models import FIELD_NAMES, ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict, ValidationVerdict
+from app.models import ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict, RequisitesVerdict
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -70,8 +70,7 @@ For EACH of the five fields (recipient_name, iban, edrpou_rnokpp, amount, paymen
 extracted value faithfully matches the source:
 {_REQUISITE_RULES}
 
-Set matches=false and provide corrected_value when a value is wrong or incomplete. \
-Set all_match=true only if every field matches.
+Set matches=false when a value is wrong or incomplete.
 
 Extracted JSON:
 """
@@ -107,7 +106,7 @@ the extracted value faithfully matches the source by these definitions:
 - A field extracted as null counts as a match only when the source genuinely lacks it, or when the definition \
 above asks for null.
 
-Set matches=false and provide corrected_value when a value is wrong or incomplete.
+Set matches=false when a value is wrong or incomplete.
 
 Extracted JSON:
 """
@@ -192,10 +191,9 @@ async def extract(source: Source) -> ExtractedRequisites:
                         effort=MODEL_EFFORT)
 
 
-async def validate(source: Source, extracted: ExtractedRequisites) -> ValidationVerdict:
+async def validate(source: Source, extracted: ExtractedRequisites) -> RequisitesVerdict:
     instruction = VALIDATION_PROMPT + extracted.model_dump_json(indent=2)
-    return await _parse(source, instruction, ValidationVerdict, model=_model, max_tokens=MAX_TOKENS,
-                        effort=MODEL_EFFORT)
+    return await _parse(source, instruction, RequisitesVerdict, model=_model, max_tokens=MAX_TOKENS, effort=MODEL_EFFORT)
 
 
 async def extract_purpose(source: Source) -> PurposeFields:
@@ -203,6 +201,6 @@ async def extract_purpose(source: Source) -> PurposeFields:
 
 
 async def validate_purpose(source: Source, requisites: ExtractedRequisites, fields: PurposeFields) -> PurposeValidationVerdict:
-    extracted = {"requisites": requisites.model_dump(include=set(FIELD_NAMES)), "purpose": fields.model_dump()}
+    extracted = {"requisites": requisites.model_dump(include=set(RequisitesVerdict.model_fields)), "purpose": fields.model_dump()}
     instruction = PURPOSE_VALIDATION_PROMPT + json.dumps(extracted, ensure_ascii=False, indent=2)
     return await _parse(source, instruction, PurposeValidationVerdict, model=_model, max_tokens=MAX_TOKENS, effort=MODEL_EFFORT)

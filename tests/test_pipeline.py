@@ -7,8 +7,8 @@ from nbu_payment_qr import MAX_AMOUNT, NBU_QR_PREFIX, build_nbu_qr
 
 from app import llm, pipeline, texts
 from app.llm import Source
-from app.models import (PURPOSE_FIELD_NAMES, ExtractedRequisites, FieldVerdict, GateVerdict, PurposeFields,
-                        PurposeFieldVerdict, PurposeValidationVerdict, ValidationVerdict)
+from app.models import (Checks, ExtractedRequisites, FieldCheck, GateVerdict, PurposeFields, PurposeValidationVerdict,
+                        PurposeVerdict, RequisitesVerdict)
 
 VALID_IBAN = "UA693000010000000012345678901"
 
@@ -21,8 +21,6 @@ GOOD_REQUISITES = ExtractedRequisites(
 )
 
 TEXT_SOURCE = Source(kind="text", text="реквізити")
-
-FIELD_NAMES = ["recipient_name", "iban", "edrpou_rnokpp", "amount", "payment_purpose"]
 
 
 def payload_lines(url: str) -> list[str]:
@@ -39,16 +37,21 @@ def stage_collector() -> tuple[list[str], pipeline.OnStage]:
     return stages, on_stage
 
 
-def verdict(all_match: bool) -> ValidationVerdict:
-    return ValidationVerdict(
-        fields=[FieldVerdict(field=name, matches=all_match) for name in FIELD_NAMES],
-        all_match=all_match,
-    )
+def checks(model: type[Checks], mismatched: tuple[str, ...] = ()) -> Checks:
+    assert set(mismatched) <= model.model_fields.keys()
+    return model(**{name: FieldCheck(matches=name not in mismatched) for name in model.model_fields})
+
+
+def all_or_none_match(model: type[Checks], all_match: bool) -> Checks:
+    return checks(model, () if all_match else tuple(model.model_fields))
+
+
+def verdict(all_match: bool) -> RequisitesVerdict:
+    return all_or_none_match(RequisitesVerdict, all_match)
 
 
 class LlmStub:
-    def __init__(self, monkeypatch, extracted: ExtractedRequisites, verdicts: list[ValidationVerdict],
-                 gate_passes: bool = True):
+    def __init__(self, monkeypatch, extracted: ExtractedRequisites, verdicts: list[RequisitesVerdict], gate_passes: bool = True):
         self.gate_calls = 0
         self.extract_calls = 0
         self.validate_calls = 0
@@ -114,15 +117,11 @@ def test_second_mismatch_fails_without_further_retries(monkeypatch):
     assert stub.validate_calls == 2
 
 
-def test_single_field_mismatch_counts_as_mismatch_despite_all_match_flag(monkeypatch):
-    lying_verdict = ValidationVerdict(
-        fields=[FieldVerdict(field="iban", matches=False, corrected_value="UA00")],
-        all_match=True,
-    )
-    stub = LlmStub(monkeypatch, GOOD_REQUISITES, [lying_verdict, verdict(True)])
+def test_single_field_mismatch_triggers_retry(monkeypatch):
+    stub = LlmStub(monkeypatch, GOOD_REQUISITES, [checks(RequisitesVerdict, mismatched=("iban",)), verdict(True)])
     result = asyncio.run(pipeline.process(TEXT_SOURCE))
     assert result.ok
-    assert stub.extract_calls == 2
+    assert stub.extract_calls == stub.validate_calls == 2
 
 
 def test_missing_iban_yields_error_and_no_qr(monkeypatch):
@@ -281,12 +280,9 @@ GENERATED_PURPOSE = "Оплата за товар згідно рахунку �
 CARD_REQUISITES = GOOD_REQUISITES.model_copy(update={"payment_purpose": None})
 
 
-def purpose_verdict(requisites_match: bool = True, purpose_match: bool = True,
-                    requisite_fields: tuple[str, ...] = tuple(FIELD_NAMES)) -> PurposeValidationVerdict:
-    return PurposeValidationVerdict(
-        requisites=[FieldVerdict(field=name, matches=requisites_match) for name in requisite_fields],
-        purpose=[PurposeFieldVerdict(field=name, matches=purpose_match) for name in PURPOSE_FIELD_NAMES],
-    )
+def purpose_verdict(requisites_match: bool = True, purpose_match: bool = True) -> PurposeValidationVerdict:
+    return PurposeValidationVerdict(requisites=all_or_none_match(RequisitesVerdict, requisites_match),
+                                    purpose=all_or_none_match(PurposeVerdict, purpose_match))
 
 
 class PurposeStub:
@@ -373,19 +369,10 @@ def test_add_purpose_reports_error_of_second_attempt(monkeypatch):
     assert result.error == texts.ERR_PURPOSE_UNRELIABLE
 
 
-def test_add_purpose_verdict_missing_purpose_field_counts_as_mismatch(monkeypatch):
-    partial = purpose_verdict()
-    partial.purpose = [verdict for verdict in partial.purpose if verdict.field != "invoice_date"]
-    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [partial, partial])
-    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
-    assert result.error == texts.ERR_PURPOSE_UNRELIABLE
-
-
-def test_add_purpose_verdict_missing_requisite_field_counts_as_mismatch(monkeypatch):
-    partial = purpose_verdict(requisite_fields=("recipient_name", "iban"))
-    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [partial, partial])
-    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
-    assert result.error == texts.ERR_REQUISITES_CHANGED
+@pytest.mark.parametrize("model,field", [(model, field) for model in Checks.__subclasses__() for field in model.model_fields])
+def test_single_field_mismatch_fails_verdict(model, field):
+    assert checks(model).all_match
+    assert not checks(model, mismatched=(field,)).all_match
 
 
 @pytest.mark.parametrize("raw_iban", ["ua69 3000 0100 0000 0012 3456 78901", " UA693000010000000012345678901 "])

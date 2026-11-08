@@ -1,4 +1,4 @@
-from typing import Literal, get_args
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,10 +21,6 @@ class ExtractedRequisites(BaseModel):
     notes: str | None = Field(None, description="Ambiguities or warnings about the extraction")
 
 
-FieldName = Literal["recipient_name", "iban", "edrpou_rnokpp", "amount", "payment_purpose"]
-FIELD_NAMES: tuple[FieldName, ...] = get_args(FieldName)
-
-
 class PurposeFields(BaseModel):
     invoice_number: str | None = Field(None, description='The invoice\'s own number exactly as written, without the "№" sign')
     invoice_date: str | None = Field(None, description="The invoice's date exactly as written")
@@ -33,25 +29,35 @@ class PurposeFields(BaseModel):
         None, description="The name of the only item exactly as written, when the invoice lists exactly one item")
 
 
-PurposeFieldName = Literal["invoice_number", "invoice_date", "goods_kind", "item_name"]
-PURPOSE_FIELD_NAMES: tuple[PurposeFieldName, ...] = get_args(PurposeFieldName)
-
-
-class FieldVerdict(BaseModel):
-    field: FieldName
+class FieldCheck(BaseModel):
     matches: bool = Field(description="Whether the extracted value faithfully matches the source")
-    corrected_value: str | None = Field(None, description="The correct value when matches is false")
 
 
-class ValidationVerdict(BaseModel):
-    fields: list[FieldVerdict]
-    all_match: bool = Field(description="True only if every field matches the source")
+class Checks(BaseModel):
+    """A verdict whose every field is a `FieldCheck`.
+    A subclass must not give a field a default, because the structured-output schema would then not require that field,
+    so a verdict could leave it unchecked."""
+
+    @property
+    def all_match(self) -> bool:
+        return all(getattr(self, name).matches for name in type(self).model_fields)
 
 
-class PurposeFieldVerdict(FieldVerdict):
-    field: PurposeFieldName
+class RequisitesVerdict(Checks):
+    recipient_name: FieldCheck
+    iban: FieldCheck
+    edrpou_rnokpp: FieldCheck
+    amount: FieldCheck
+    payment_purpose: FieldCheck
+
+
+class PurposeVerdict(Checks):
+    invoice_number: FieldCheck
+    invoice_date: FieldCheck
+    goods_kind: FieldCheck
+    item_name: FieldCheck
 
 
 class PurposeValidationVerdict(BaseModel):
-    requisites: list[FieldVerdict]
-    purpose: list[PurposeFieldVerdict]
+    requisites: RequisitesVerdict
+    purpose: PurposeVerdict
