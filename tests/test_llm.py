@@ -9,7 +9,7 @@ import pytest
 
 from app import llm
 from app.llm import Source, _content_blocks
-from app.models import ExtractedRequisites, GateVerdict, ValidationVerdict
+from app.models import ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict, ValidationVerdict
 
 PDF_BYTES = b"%PDF-1.4 fake"
 PNG_BYTES = b"\x89PNG fake"
@@ -89,6 +89,26 @@ def test_extract_and_validate_run_on_configured_model_at_high_effort(api):
         ("claude-sonnet-5-5", 16000, _output_config(ExtractedRequisites, "high")),
         ("claude-sonnet-5-5", 16000, _output_config(ValidationVerdict, "high")),
     ]
+
+
+def test_purpose_calls_run_on_configured_model_and_validate_only_requisite_fields(api):
+    answers, bodies = api
+    fields = PurposeFields(invoice_number="00007", invoice_date="12.10.2026", goods_kind="goods")
+    verdict = PurposeValidationVerdict(requisites=[], purpose=[])
+    answers += [(fields.model_dump_json(), "end_turn"), (verdict.model_dump_json(), "end_turn")]
+    source = Source(kind="text", text="Рахунок № 00007 від 12.10.2026")
+    requisites = ExtractedRequisites(iban="UA00", has_invoice_reference=True, notes="примітка")
+    assert asyncio.run(llm.extract_purpose(source)) == fields
+    assert asyncio.run(llm.validate_purpose(source, requisites, fields)) == verdict
+    assert [(b["model"], b["output_config"]) for b in bodies] == [
+        ("claude-sonnet-5-5", _output_config(PurposeFields, "high")),
+        ("claude-sonnet-5-5", _output_config(PurposeValidationVerdict, "high")),
+    ]
+    instruction = bodies[1]["messages"][0]["content"][0]["text"]
+    extracted = json.loads(instruction.removeprefix(llm.PURPOSE_VALIDATION_PROMPT).split("\n\n<document>")[0])
+    assert extracted == {"requisites": {"recipient_name": None, "iban": "UA00", "edrpou_rnokpp": None, "amount": None,
+                                        "payment_purpose": None},
+                         "purpose": fields.model_dump()}
 
 
 PARTIAL = '{"recipient_name": "ТОВ Ромашка", "iban": "UA7232'

@@ -1,6 +1,7 @@
-"""Anthropic API layer: requisites extraction and independent validation."""
+"""Anthropic API layer: extraction of requisites and payment-purpose details, and their independent validation."""
 
 import base64
+import json
 from dataclasses import dataclass
 from typing import Literal, TypeVar
 
@@ -10,7 +11,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import (ANTHROPIC_TIMEOUT_SECONDS, GATE_EFFORT, GATE_MAX_TOKENS, GATE_MODEL, MAX_TOKENS, MODEL_EFFORT,
                         Config)
-from app.models import ExtractedRequisites, GateVerdict, ValidationVerdict
+from app.models import FIELD_NAMES, ExtractedRequisites, GateVerdict, PurposeFields, PurposeValidationVerdict, ValidationVerdict
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -43,15 +44,12 @@ shorter than it really is — capture the complete text, including invoice numbe
 ВІДПОВІДАЛЬНІСТЮ -> ТОВ, ПРИВАТНЕ ПІДПРИЄМСТВО -> ПП, ФІЗИЧНА ОСОБА-ПІДПРИЄМЕЦЬ -> ФОП, etc.). \
 The proper name itself must stay EXACTLY as written in the source, preserving its letter case: \
 ТОВАРИСТВО З ОБМЕЖЕНОЮ ВІДПОВІДАЛЬНІСТЮ "ОРІОН-ПЛЮС" -> ТОВ "ОРІОН-ПЛЮС" (not ТОВ "Оріон-Плюс").
+- has_invoice_reference: true when the source states the invoice's own number or date \
+(рахунок №…, від …), false otherwise.
 - If a field is genuinely absent from the source, set it to null — never guess.
 - Put ambiguities or concerns into notes."""
 
-VALIDATION_PROMPT = """\
-You are an independent verifier. You are given a payment document (or image, or text) and a JSON object with \
-requisites that another system extracted from it.
-
-For EACH of the five fields (recipient_name, iban, edrpou_rnokpp, amount, payment_purpose) decide whether the \
-extracted value faithfully matches the source:
+_REQUISITE_RULES = """\
 - recipient_name, iban, edrpou_rnokpp must belong to the payment RECIPIENT (отримувач/одержувач/постачальник — \
 the party the money is sent TO), not to the payer (платник). Flag a mismatch if a value was taken from the \
 payer's requisites.
@@ -62,10 +60,54 @@ match the source letter-for-letter INCLUDING letter case — flag a mismatch if 
 - amount: must equal the amount in the source as a numeric value.
 - payment_purpose: must be the COMPLETE purpose text from the source; flag a mismatch if it is truncated \
 or incomplete.
-- A field extracted as null counts as a match only when the source genuinely lacks it.
+- A field extracted as null counts as a match only when the source genuinely lacks it."""
+
+VALIDATION_PROMPT = f"""\
+You are an independent verifier. You are given a payment document (or image, or text) and a JSON object with \
+requisites that another system extracted from it.
+
+For EACH of the five fields (recipient_name, iban, edrpou_rnokpp, amount, payment_purpose) decide whether the \
+extracted value faithfully matches the source:
+{_REQUISITE_RULES}
 
 Set matches=false and provide corrected_value when a value is wrong or incomplete. \
 Set all_match=true only if every field matches.
+
+Extracted JSON:
+"""
+
+_PURPOSE_FIELD_RULES = """\
+- invoice_number: the invoice's OWN number exactly as written, without the "№" sign and without words like \
+"Рахунок". Never the number of a contract, a delivery note, or any other document.
+- invoice_date: the invoice's OWN date exactly as written in the source, in its original format.
+- goods_kind: "services" when the invoice is for services or work, "goods" otherwise (also for a mix).
+- item_name: when the invoice lists exactly ONE item, that item's name exactly as written; null when it lists \
+several items or none."""
+
+PURPOSE_PROMPT = f"""\
+You read a Ukrainian invoice (рахунок) from the provided document, image, or text and extract the details \
+for its payment purpose.
+
+Rules:
+- Copy values verbatim from the source. Do not translate, reformat, or invent anything.
+{_PURPOSE_FIELD_RULES}
+- If a field is genuinely absent from the source, set it to null — never guess."""
+
+PURPOSE_VALIDATION_PROMPT = f"""\
+You are an independent verifier. You are given a payment document (or image, or text) and two JSON objects that \
+another system extracted from it: the payment requisites and the details for a payment purpose.
+
+In "requisites", for EACH of the five fields (recipient_name, iban, edrpou_rnokpp, amount, payment_purpose) \
+decide whether the extracted value faithfully matches the source:
+{_REQUISITE_RULES}
+
+In "purpose", for EACH of the four fields (invoice_number, invoice_date, goods_kind, item_name) decide whether \
+the extracted value faithfully matches the source by these definitions:
+{_PURPOSE_FIELD_RULES}
+- A field extracted as null counts as a match only when the source genuinely lacks it, or when the definition \
+above asks for null.
+
+Set matches=false and provide corrected_value when a value is wrong or incomplete.
 
 Extracted JSON:
 """
@@ -154,3 +196,13 @@ async def validate(source: Source, extracted: ExtractedRequisites) -> Validation
     instruction = VALIDATION_PROMPT + extracted.model_dump_json(indent=2)
     return await _parse(source, instruction, ValidationVerdict, model=_model, max_tokens=MAX_TOKENS,
                         effort=MODEL_EFFORT)
+
+
+async def extract_purpose(source: Source) -> PurposeFields:
+    return await _parse(source, PURPOSE_PROMPT, PurposeFields, model=_model, max_tokens=MAX_TOKENS, effort=MODEL_EFFORT)
+
+
+async def validate_purpose(source: Source, requisites: ExtractedRequisites, fields: PurposeFields) -> PurposeValidationVerdict:
+    extracted = {"requisites": requisites.model_dump(include=set(FIELD_NAMES)), "purpose": fields.model_dump()}
+    instruction = PURPOSE_VALIDATION_PROMPT + json.dumps(extracted, ensure_ascii=False, indent=2)
+    return await _parse(source, instruction, PurposeValidationVerdict, model=_model, max_tokens=MAX_TOKENS, effort=MODEL_EFFORT)

@@ -1,6 +1,6 @@
 import pytest
 
-from app import albums, feedback
+from app import albums, feedback, handlers
 from app.main import build_dispatcher
 from tests.telegram_fakes import DEVELOPER_CHAT_ID
 
@@ -16,5 +16,6 @@ def _shared_dispatcher():
 def dispatcher(_shared_dispatcher, monkeypatch):
     monkeypatch.setattr(feedback, "_cooldown", feedback.Cooldown())
     monkeypatch.setattr(feedback, "_waits", {})
+    monkeypatch.setattr(handlers, "_purpose_in_progress", set())
     monkeypatch.setattr(albums, "ALBUM_SETTLE_SECONDS", 0.01)
     return _shared_dispatcher

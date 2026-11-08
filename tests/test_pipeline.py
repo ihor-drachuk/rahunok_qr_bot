@@ -7,7 +7,8 @@ from nbu_payment_qr import MAX_AMOUNT, NBU_QR_PREFIX, build_nbu_qr
 
 from app import llm, pipeline, texts
 from app.llm import Source
-from app.models import ExtractedRequisites, FieldVerdict, GateVerdict, ValidationVerdict
+from app.models import (PURPOSE_FIELD_NAMES, ExtractedRequisites, FieldVerdict, GateVerdict, PurposeFields,
+                        PurposeFieldVerdict, PurposeValidationVerdict, ValidationVerdict)
 
 VALID_IBAN = "UA693000010000000012345678901"
 
@@ -273,6 +274,118 @@ def test_retry_emits_retrying_stage_exactly_once(monkeypatch):
     asyncio.run(pipeline.process(TEXT_SOURCE, on_stage))
     assert stages == [texts.status_searching(), texts.status_extracting(),
                       texts.status_validating(), texts.status_retrying()]
+
+
+PURPOSE = PurposeFields(invoice_number="00007", invoice_date="12.10.2026", goods_kind="goods")
+GENERATED_PURPOSE = "Оплата за товар згідно рахунку №00007 від 12.10.2026"
+CARD_REQUISITES = GOOD_REQUISITES.model_copy(update={"payment_purpose": None})
+
+
+def purpose_verdict(requisites_match: bool = True, purpose_match: bool = True,
+                    requisite_fields: tuple[str, ...] = tuple(FIELD_NAMES)) -> PurposeValidationVerdict:
+    return PurposeValidationVerdict(
+        requisites=[FieldVerdict(field=name, matches=requisites_match) for name in requisite_fields],
+        purpose=[PurposeFieldVerdict(field=name, matches=purpose_match) for name in PURPOSE_FIELD_NAMES],
+    )
+
+
+class PurposeStub:
+    def __init__(self, monkeypatch, fields: list[PurposeFields], verdicts: list[PurposeValidationVerdict]):
+        self.sources: list[Source] = []
+        self.validated: list[tuple[ExtractedRequisites, PurposeFields]] = []
+
+        async def fake_extract_purpose(source):
+            self.sources.append(source)
+            return fields[len(self.sources) - 1]
+
+        async def fake_validate_purpose(source, requisites, extracted):
+            self.validated.append((requisites, extracted))
+            return verdicts[len(self.validated) - 1]
+
+        monkeypatch.setattr(llm, "extract_purpose", fake_extract_purpose)
+        monkeypatch.setattr(llm, "validate_purpose", fake_validate_purpose)
+
+
+def test_add_purpose_builds_qr_with_generated_purpose(monkeypatch):
+    stub = PurposeStub(monkeypatch, [PURPOSE], [purpose_verdict()])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.ok
+    assert payload_lines(result.qr.url)[11] == GENERATED_PURPOSE
+    assert result.requisites.payment_purpose == GENERATED_PURPOSE
+    assert result.warnings == []
+    assert stub.validated == [(CARD_REQUISITES, PURPOSE)]
+
+
+def test_add_purpose_recomputes_warnings_of_card_requisites(monkeypatch):
+    PurposeStub(monkeypatch, [PURPOSE], [purpose_verdict()])
+    requisites = CARD_REQUISITES.model_copy(update={"edrpou_rnokpp": "12345", "amount": "тринадцять тисяч"})
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, requisites))
+    assert result.ok
+    assert result.warnings == [texts.WARN_BAD_AMOUNT, texts.WARN_BAD_CODE]
+    assert payload_lines(result.qr.url)[7:9] == ["", ""]
+
+
+@pytest.mark.parametrize("missing", [None, ""])
+def test_add_purpose_reports_no_invoice_reference_only_once_validated(monkeypatch, missing):
+    no_reference = PURPOSE.model_copy(update={"invoice_number": missing, "invoice_date": missing})
+    stub = PurposeStub(monkeypatch, [no_reference], [purpose_verdict()])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert not result.ok
+    assert result.error == texts.ERR_NO_INVOICE_REFERENCE
+    assert len(stub.validated) == 1
+
+
+def test_add_purpose_retries_when_validator_rejects_missing_invoice_reference(monkeypatch):
+    no_reference = PURPOSE.model_copy(update={"invoice_number": None, "invoice_date": None})
+    stub = PurposeStub(monkeypatch, [no_reference, PURPOSE], [purpose_verdict(purpose_match=False), purpose_verdict()])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.ok
+    assert len(stub.validated) == 2
+
+
+def test_add_purpose_retries_once_after_mismatch_and_succeeds(monkeypatch):
+    retried = PURPOSE.model_copy(update={"invoice_number": "00008"})
+    stub = PurposeStub(monkeypatch, [PURPOSE, retried], [purpose_verdict(purpose_match=False), purpose_verdict()])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.ok
+    assert payload_lines(result.qr.url)[11] == "Оплата за товар згідно рахунку №00008 від 12.10.2026"
+    assert len(stub.sources) == len(stub.validated) == 2
+
+
+def test_add_purpose_second_purpose_mismatch_is_unreliable(monkeypatch):
+    stub = PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [purpose_verdict(purpose_match=False)] * 2)
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.error == texts.ERR_PURPOSE_UNRELIABLE
+    assert len(stub.validated) == 2
+
+
+@pytest.mark.parametrize("second", [purpose_verdict(requisites_match=False),
+                                    purpose_verdict(requisites_match=False, purpose_match=False)])
+def test_add_purpose_second_requisites_mismatch_says_requisites_changed(monkeypatch, second):
+    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [purpose_verdict(requisites_match=False), second])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.error == texts.ERR_REQUISITES_CHANGED
+
+
+def test_add_purpose_reports_error_of_second_attempt(monkeypatch):
+    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [purpose_verdict(requisites_match=False), purpose_verdict(purpose_match=False)])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.error == texts.ERR_PURPOSE_UNRELIABLE
+
+
+def test_add_purpose_verdict_missing_purpose_field_counts_as_mismatch(monkeypatch):
+    partial = purpose_verdict()
+    partial.purpose = [verdict for verdict in partial.purpose if verdict.field != "invoice_date"]
+    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [partial, partial])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.error == texts.ERR_PURPOSE_UNRELIABLE
+
+
+def test_add_purpose_verdict_missing_requisite_field_counts_as_mismatch(monkeypatch):
+    partial = purpose_verdict(requisite_fields=("recipient_name", "iban"))
+    PurposeStub(monkeypatch, [PURPOSE, PURPOSE], [partial, partial])
+    result = asyncio.run(pipeline.add_purpose(TEXT_SOURCE, CARD_REQUISITES))
+    assert result.error == texts.ERR_REQUISITES_CHANGED
 
 
 @pytest.mark.parametrize("raw_iban", ["ua69 3000 0100 0000 0012 3456 78901", " UA693000010000000012345678901 "])

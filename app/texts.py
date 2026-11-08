@@ -4,9 +4,10 @@ import re
 from decimal import Decimal
 
 from aiogram import html
-from aiogram.types import User
+from aiogram.types import MessageEntity, User
 
 from app import emoji
+from app.models import ExtractedRequisites, PurposeFields
 
 CARD_SUBTITLE = "Telegram-бот для зручної оплати"
 CARD_CALL_TO_ACTION = "Відкрий банк → Скануй QR-код"
@@ -80,6 +81,18 @@ ERR_NETWORK = "😔 Не вдалося звʼязатися із сервісо
 ERR_API = "😔 Сервіс розпізнавання тимчасово не відповідає. Спробуйте, будь ласка, трохи пізніше."
 ERR_TELEGRAM = "⚠️ Помилка Telegram під час обробки повідомлення. Спробуйте ще раз."
 ERR_UNEXPECTED = "😔 Сталася неочікувана помилка. Спробуйте, будь ласка, ще раз пізніше."
+ERR_NO_INVOICE_REFERENCE = (
+    "🤷 У документі немає ні номера, ні дати рахунку, тому скласти призначення платежу не вдалося. "
+    "Введіть його вручну у застосунку банку."
+)
+ERR_PURPOSE_UNRELIABLE = (
+    "❌ Не вдалося надійно скласти призначення платежу: повторна перевірка виявила розбіжності. "
+    "Введіть його вручну у застосунку банку."
+)
+ERR_REQUISITES_CHANGED = (
+    "❌ Реквізити в документі не збіглися з цією карткою — можливо, повідомлення змінили. "
+    "Надішліть, будь ласка, документ ще раз."
+)
 
 WARN_NO_AMOUNT = "суму не знайдено — введіть її вручну у застосунку банку"
 WARN_BAD_AMOUNT = "суму не вдалося розібрати — введіть її вручну у застосунку банку"
@@ -113,6 +126,37 @@ def format_requisites(requisites) -> str:
                 rendered += " грн"
             lines.append(f"{label}: {rendered}")
     return "\n".join(lines)
+
+
+def parse_requisites(text: str, entities: list[MessageEntity]) -> ExtractedRequisites | None:
+    """Reads back the values that `format_requisites` wrote, from the `text` and `entities` Telegram gives for
+    the sent message. `None` when the text holds no IBAN."""
+    fields_by_label = {f"{label}: ": field for field, label in _FIELD_LABELS}
+    utf16 = text.encode("utf-16-le")
+    values = {}
+    for entity in entities:
+        if entity.type != "code":
+            continue
+        before = utf16[:entity.offset * 2].decode("utf-16-le")  # entity offsets count UTF-16 code units
+        field = fields_by_label.get(before[before.rfind("\n") + 1:])
+        if field is not None and field not in values:
+            values[field] = entity.extract_from(text)
+    return ExtractedRequisites(**values) if "iban" in values else None
+
+
+def format_generated_purpose(fields: PurposeFields) -> str:
+    """Fills the purpose template from `fields`. `fields` must hold `invoice_number` or `invoice_date`, otherwise the
+    purpose does not say which invoice it pays."""
+    if fields.item_name:
+        subject = f'"{fields.item_name}"'
+    else:
+        subject = "послуги" if fields.goods_kind == "services" else "товар"
+    reference = "згідно рахунку"
+    if fields.invoice_number:
+        reference += f" №{fields.invoice_number}"
+    if fields.invoice_date:
+        reference += f" від {fields.invoice_date}"
+    return f"Оплата за {subject} {reference}"
 
 
 def format_pay_links(qr) -> str:
@@ -160,9 +204,13 @@ REPORT_MESSAGE_LABEL = "📤 Надіслати повідомлення роз�
 REPORT_CONFIRM_LABEL = "✅ Так, надіслати"
 REPORT_DECLINE_LABEL = "✖️ Не треба"
 REPORT_SENT = "✅ Надіслано розробнику"
-REPORT_SOURCE_GONE = "Не вдалося: повідомлення вже видалено"
 REPORT_FAILED = "Не вдалося надіслати. Спробуйте, будь ласка, пізніше."
-REPORT_EXPIRED = "Це повідомлення вже застаріло"
+SOURCE_GONE = "Не вдалося: повідомлення вже видалено"
+MESSAGE_EXPIRED = "Це повідомлення вже застаріло"
+
+PURPOSE_LABEL = "✍️ Згенерувати призначення"
+PURPOSE_IN_PROGRESS_LABEL = "⏳ Генерую…"
+PURPOSE_ALREADY_RUNNING = "⏳ Уже генерую, зачекайте трохи."
 
 DEVELOPER_REPLY_INTRO = "💬 Це відповідь розробника. Щоб відповісти, надішліть /contact."
 DEVELOPER_REPLY_HINT = "↩️ Щоб відповісти, зробіть Reply саме на заголовок з ID."

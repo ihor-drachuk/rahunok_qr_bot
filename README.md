@@ -24,6 +24,10 @@ While the pipeline runs, the bot shows a live status message and removes it once
 
 Missing optional fields, a malformed amount or code, and an amount above the QR limit are left out of the QR, with a warning. Without an amount, the banking app asks the payer to enter it. A recipient name too long for the QR ends with an error instead of a QR. The bot replies in Ukrainian.
 
+## Payment purpose on request
+
+When an invoice has no payment purpose but states its number or date, the card gets a "✍️ Згенерувати призначення" button, unless its text is too long for one captioned photo. A press builds the purpose `Оплата за "<item>" згідно рахунку №<number> від <date>` from the invoice, with `товар` or `послуги` in place of the item when the invoice lists several items or none, and leaves out the number or the date when the invoice lacks it. A second model call checks the purpose and the card's requisites against the source message. The bot then replaces the card with a new QR, or sends a new card when the old one cannot be edited or the new text is too long for a caption. The bot saves nothing for this, so the button works after a restart: every card is a reply to the message it was made from, and the requisites are read back from the card's text.
+
 ## Feedback
 
 `/contact` and its alias `/feedback` send the user's next message, or album, to the feedback chat, if the user sends it within 15 minutes. `/contact <text>`, or `/contact` as the caption of a photo, file or album, sends that message at once.

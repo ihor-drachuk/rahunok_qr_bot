@@ -12,6 +12,7 @@ from aiogram.types import Chat, InaccessibleMessage, User
 from app import feedback, handlers, texts
 from app.albums import AlbumMiddleware
 from app.feedback import ReportAction, ReportCallback
+from app.llm import Source
 from tests.telegram_fakes import DEVELOPER_CHAT_ID, USER, bot_message, callback_update, make_bot, message_update
 
 DEVELOPER = User(id=DEVELOPER_CHAT_ID, is_bot=False, first_name="Dev")
@@ -23,14 +24,14 @@ TIMEOUT = timedelta(minutes=feedback.WAIT_TIMEOUT_MINUTES)
 def pipeline_calls(monkeypatch):
     calls = []
 
+    async def fake_load_source(message, bot):
+        return Source(kind="text", text="")
+
     async def fake_process_and_reply(message, source, stage_mode):
         calls.append(message.message_id)
 
-    async def fake_handle_media(message, bot, file_id, kind, media_type, stage_mode):
-        calls.append(message.message_id)
-
+    monkeypatch.setattr(handlers, "_load_source", fake_load_source)
     monkeypatch.setattr(handlers, "_process_and_reply", fake_process_and_reply)
-    monkeypatch.setattr(handlers, "_handle_media", fake_handle_media)
     return calls
 
 
@@ -484,7 +485,7 @@ def test_report_confirm_for_deleted_source_says_so(dispatcher):
     asyncio.run(dispatcher.feed_update(bot, callback_update(report_data(ReportAction.CONFIRM), error_reply())))
 
     [answer] = session.calls(AnswerCallbackQuery)
-    assert answer.text == texts.REPORT_SOURCE_GONE
+    assert answer.text == texts.SOURCE_GONE
     assert sent_texts(session, DEVELOPER_CHAT_ID) == []
     assert session.calls(EditMessageText) == []
 
@@ -495,7 +496,7 @@ def test_report_on_inaccessible_message_says_expired(dispatcher):
     asyncio.run(dispatcher.feed_update(bot, callback_update(report_data(ReportAction.CONFIRM), old)))
 
     [answer] = session.calls(AnswerCallbackQuery)
-    assert answer.text == texts.REPORT_EXPIRED
+    assert answer.text == texts.MESSAGE_EXPIRED
     assert session.calls(CopyMessages) == []
 
 

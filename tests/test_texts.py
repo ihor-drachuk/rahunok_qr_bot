@@ -7,7 +7,7 @@ import pytest
 from aiogram.types import User
 
 from app import emoji, texts
-from app.models import ExtractedRequisites
+from app.models import ExtractedRequisites, PurposeFields
 from app.texts import (
     format_card_amount,
     format_error,
@@ -15,6 +15,7 @@ from app.texts import (
     format_requisites,
     format_success,
 )
+from tests.telegram_fakes import rendered
 
 VALID_IBAN = "UA693000010000000012345678901"
 
@@ -149,6 +150,42 @@ def test_set_custom_emoji_ids_replaces_rather_than_merges():
         assert emoji.render("🧾") == '<tg-emoji emoji-id="NEW_RECEIPT">🧾</tg-emoji>'
     finally:
         emoji.set_custom_emoji_ids({})
+
+
+@pytest.mark.parametrize("requisites", [
+    ExtractedRequisites(recipient_name='ТОВ "A&B" <X>', iban="ua69 3000 0100 0000 0012 3456 78901",
+                        edrpou_rnokpp="12345", amount="тринадцять тисяч", payment_purpose="Оплата: рахунок № 1"),
+    ExtractedRequisites(iban=VALID_IBAN, amount="13727.00"),
+])
+def test_parse_requisites_reads_back_what_format_success_wrote(requisites):
+    emoji.set_custom_emoji_ids({"🧾": "RECEIPT_EID"})  # a custom emoji adds an entity that `parse_requisites` must skip
+    try:
+        text, entities = rendered(format_success(requisites, ["IBAN: перевірте"], QR))
+    finally:
+        emoji.set_custom_emoji_ids({})
+    assert texts.parse_requisites(text, entities) == requisites
+
+
+def test_parse_requisites_without_iban_is_none():
+    text, entities = rendered(format_success(ExtractedRequisites(recipient_name="ТОВ"), [], QR))
+    assert texts.parse_requisites(text, entities) is None
+
+
+@pytest.mark.parametrize("fields,purpose", [
+    (PurposeFields(invoice_number="00007", invoice_date="12.10.2026", goods_kind="goods", item_name="Блок живлення TR 15V 100A"),
+     'Оплата за "Блок живлення TR 15V 100A" згідно рахунку №00007 від 12.10.2026'),
+    (PurposeFields(invoice_number="СФ-12", invoice_date="12 жовтня 2026 р.", goods_kind="goods"),
+     "Оплата за товар згідно рахунку №СФ-12 від 12 жовтня 2026 р."),
+    (PurposeFields(invoice_number="7", invoice_date="12.10.2026", goods_kind="services"),
+     "Оплата за послуги згідно рахунку №7 від 12.10.2026"),
+    (PurposeFields(invoice_number="7", goods_kind="goods"), "Оплата за товар згідно рахунку №7"),
+    (PurposeFields(invoice_date="12.10.2026", goods_kind="services"), "Оплата за послуги згідно рахунку від 12.10.2026"),
+    (PurposeFields(invoice_number="", invoice_date="12.10.2026", goods_kind="goods", item_name=""),
+     "Оплата за товар згідно рахунку від 12.10.2026"),
+    (PurposeFields(invoice_number="7", invoice_date="", goods_kind="goods"), "Оплата за товар згідно рахунку №7"),
+])
+def test_format_generated_purpose_fills_template_and_drops_missing_part(fields, purpose):
+    assert texts.format_generated_purpose(fields) == purpose
 
 
 FEEDBACK_USER = User(id=1001, is_bot=False, first_name="Олена <b>", last_name="&Ко", username="olena")

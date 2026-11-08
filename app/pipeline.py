@@ -1,4 +1,5 @@
-"""Message processing pipeline: gate -> extract -> validate -> retry once -> local checks -> QR."""
+"""Message processing pipeline: gate -> extract -> validate -> retry once -> local checks -> QR,
+and the payment purpose made on request for a result that has none."""
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -20,7 +21,7 @@ from qrcode.constants import ERROR_CORRECT_H
 from app import llm, texts
 from app.card import CardText
 from app.llm import Source
-from app.models import ExtractedRequisites, ValidationVerdict
+from app.models import FIELD_NAMES, PURPOSE_FIELD_NAMES, ExtractedRequisites, FieldVerdict, PurposeValidationVerdict, ValidationVerdict
 
 # Blue to teal radial gradient. Error correction H keeps the QR readable under the card's centered logo.
 RAHUNOK_STYLE = QrStyle(error_correction=ERROR_CORRECT_H, center_color=(30, 90, 168), edge_color=(18, 130, 120))
@@ -63,7 +64,36 @@ async def process(source: Source, on_stage: OnStage | None = None) -> PipelineRe
         verdict = await llm.validate(source, extracted)
         if not _matches(verdict):
             return PipelineResult(ok=False, requisites=extracted, error=texts.ERR_UNRELIABLE)
+    return _build(extracted)
 
+
+def _all_fields_match(verdicts: list[FieldVerdict], names: tuple[str, ...]) -> bool:
+    # We count a field that a verdict leaves out as a mismatch, because the verdict has not checked it.
+    return all(v.matches for v in verdicts) and {v.field for v in verdicts} >= set(names)
+
+
+def _purpose_mismatch(verdict: PurposeValidationVerdict) -> str | None:
+    if not _all_fields_match(verdict.requisites, FIELD_NAMES):
+        return texts.ERR_REQUISITES_CHANGED
+    if not _all_fields_match(verdict.purpose, PURPOSE_FIELD_NAMES):
+        return texts.ERR_PURPOSE_UNRELIABLE
+    return None
+
+
+async def add_purpose(source: Source, requisites: ExtractedRequisites) -> PipelineResult:
+    """Builds the result for `requisites` with a payment purpose made from the invoice number or date in `source`.
+    We check `requisites` against `source` again, because the user may have edited the source since the card was made."""
+    for _ in range(2):
+        fields = await llm.extract_purpose(source)
+        error = _purpose_mismatch(await llm.validate_purpose(source, requisites, fields))
+        if error is None:
+            if not fields.invoice_number and not fields.invoice_date:
+                return PipelineResult(ok=False, error=texts.ERR_NO_INVOICE_REFERENCE)
+            return _build(requisites.model_copy(update={"payment_purpose": texts.format_generated_purpose(fields)}))
+    return PipelineResult(ok=False, error=error)
+
+
+def _build(extracted: ExtractedRequisites) -> PipelineResult:
     iban = normalize_iban(extracted.iban)
     if iban is None or not is_valid_iban(iban):
         return PipelineResult(ok=False, requisites=extracted, error=texts.ERR_NO_IBAN)
