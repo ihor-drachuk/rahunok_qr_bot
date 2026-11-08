@@ -251,6 +251,28 @@ def processed(monkeypatch):
     return calls
 
 
+@pytest.mark.parametrize("command,reply", [("/how", texts.HOW), ("/price", texts.PRICE)])
+def test_info_command_answers_once_without_recognition(dispatcher, processed, command, reply):
+    bot, session = make_bot()
+    asyncio.run(dispatcher.feed_update(bot, message_update(text=command)))
+
+    assert [call.text for call in session.calls(SendMessage)] == [reply]
+    assert processed == []
+
+
+def test_how_shows_repository_link_without_preview(dispatcher, processed):
+    bot, session = make_bot()
+    asyncio.run(dispatcher.feed_update(bot, message_update(text="/how")))
+
+    [answer] = session.calls(SendMessage)
+    assert "https://github.com/ihor-drachuk/rahunok_qr_bot" in answer.text
+    assert answer.link_preview_options.is_disabled
+
+
+def test_help_points_to_info_commands():
+    assert "/how" in texts.HELP and "/price" in texts.HELP and "/contact" in texts.HELP
+
+
 @pytest.mark.parametrize("download_error", [aiohttp.ClientPayloadError("connection reset"), TimeoutError()])
 def test_photo_whose_download_fails_is_answered_once(dispatcher, processed, download_error):
     bot, session = make_bot()

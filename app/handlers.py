@@ -54,6 +54,16 @@ async def on_start(message: Message) -> None:
     await message.answer(texts.HELP)
 
 
+@router.message(Command("how"))
+async def on_how(message: Message) -> None:
+    await message.answer(texts.HOW, link_preview_options=NO_LINK_PREVIEW)
+
+
+@router.message(Command("price"))
+async def on_price(message: Message) -> None:
+    await message.answer(texts.PRICE)
+
+
 @router.message(F.media_group_id)
 async def on_album(message: Message, album: list[Message], bot: Bot, stage_mode: bool) -> None:
     supported = [item for item in album if item.document or item.photo]

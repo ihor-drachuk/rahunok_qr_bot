@@ -2,7 +2,7 @@ import asyncio
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import DeleteWebhook, GetChat
+from aiogram.methods import DeleteWebhook, GetChat, SetMyCommands
 
 from app import main
 from app.config import BotConfig
@@ -64,6 +64,14 @@ def test_startup_keeps_updates_sent_while_bot_was_down(monkeypatch):
     [delete_webhook] = session.calls(DeleteWebhook)
     assert delete_webhook.drop_pending_updates is False
     assert webhook_deletes_before_polling == [1]
+
+
+def test_command_menu_holds_only_help_and_contact():
+    bot, session = make_bot()
+    asyncio.run(main._set_commands(bot))
+
+    [call] = session.calls(SetMyCommands)
+    assert [command.command for command in call.commands] == ["help", "contact"]
 
 
 def test_reachable_feedback_chat_passes_startup_check():
