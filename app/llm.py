@@ -39,7 +39,9 @@ Rules:
 - amount: the payment amount as a plain number with "." as the decimal separator, without currency symbols \
 or thousands separators.
 - payment_purpose: read the ENTIRE "призначення платежу" field. It frequently appears visually truncated or \
-shorter than it really is — capture the complete text, including invoice numbers and dates.
+shorter than it really is — capture the complete text, including invoice numbers and dates. If the source does \
+not itself state a payment purpose, set it to null: never compose one from other data, such as the invoice \
+number, date, or items.
 - recipient_name: the RECIPIENT's name with the legal form ABBREVIATED (ТОВАРИСТВО З ОБМЕЖЕНОЮ \
 ВІДПОВІДАЛЬНІСТЮ -> ТОВ, ПРИВАТНЕ ПІДПРИЄМСТВО -> ПП, ФІЗИЧНА ОСОБА-ПІДПРИЄМЕЦЬ -> ФОП, etc.). \
 The proper name itself must stay EXACTLY as written in the source, preserving its letter case: \
@@ -59,7 +61,8 @@ match the source letter-for-letter INCLUDING letter case — flag a mismatch if 
 - iban: flag a mismatch only if the country code or digits differ from the source, not for spacing or case.
 - amount: must equal the amount in the source as a numeric value.
 - payment_purpose: must be the COMPLETE purpose text from the source; flag a mismatch if it is truncated \
-or incomplete.
+or incomplete. If the source does not itself state a payment purpose, the value must be null: flag a mismatch \
+if it was composed from other data, such as the invoice number, date, or items.
 - A field extracted as null counts as a match only when the source genuinely lacks it."""
 
 VALIDATION_PROMPT = f"""\
